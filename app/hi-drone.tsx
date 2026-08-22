@@ -104,7 +104,7 @@ const downloadBlob = (blob: Blob, filename: string) => {
 
 export default function HiDrone() {
   const engineRef = useRef<HiDroneEngine | null>(null);
-  if (!engineRef.current) engineRef.current = new HiDroneEngine();
+  if (engineRef.current == null) engineRef.current = new HiDroneEngine();
 
   const [tab, setTab] = useState<Tab>("sound");
   const [powered, setPowered] = useState(false);
@@ -145,29 +145,32 @@ export default function HiDrone() {
   useEffect(() => { recordingRef.current = recording; }, [recording]);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem("hi-drone-project-v1");
-      if (stored) {
-        const project = JSON.parse(stored) as Partial<{
-          globals: Globals;
-          pitches: number[];
-          percussion: PercussionSettings;
-          cells: Cell[];
-          patches: PatchCable[];
-          scenes: (Scene | null)[];
-        }>;
-        if (project.globals) setGlobals(project.globals);
-        if (project.pitches?.length === 8) setVoicePitches(project.pitches);
-        if (project.percussion) setPercussion(project.percussion);
-        if (project.cells?.length === 8) setCells(project.cells);
-        if (project.patches) setPatches(project.patches);
-        if (project.scenes?.length === 4) setScenes(project.scenes);
-        setMessage("Local patch restored.");
+    const timer = window.setTimeout(() => {
+      try {
+        const stored = localStorage.getItem("hi-drone-project-v1");
+        if (stored) {
+          const project = JSON.parse(stored) as Partial<{
+            globals: Globals;
+            pitches: number[];
+            percussion: PercussionSettings;
+            cells: Cell[];
+            patches: PatchCable[];
+            scenes: (Scene | null)[];
+          }>;
+          if (project.globals) setGlobals(project.globals);
+          if (project.pitches?.length === 8) setVoicePitches(project.pitches);
+          if (project.percussion) setPercussion(project.percussion);
+          if (project.cells?.length === 8) setCells(project.cells);
+          if (project.patches) setPatches(project.patches);
+          if (project.scenes?.length === 4) setScenes(project.scenes);
+          setMessage("Local patch restored.");
+        }
+      } catch {
+        setMessage("Started with a clean patch.");
       }
-    } catch {
-      setMessage("Started with a clean patch.");
-    }
-    setLoaded(true);
+      setLoaded(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -224,7 +227,7 @@ export default function HiDrone() {
   useEffect(() => {
     if (!powered) return;
     const now = performance.now();
-    nextFireRef.current = cells.map((cell, index) => now + cell.time * 1000 * (0.35 + index * 0.08));
+    nextFireRef.current = cellsRef.current.map((cell, index) => now + cell.time * 1000 * (0.35 + index * 0.08));
 
     const interval = window.setInterval(() => {
       const time = performance.now();
@@ -353,7 +356,7 @@ export default function HiDrone() {
     patches: patches.map((patch) => ({ ...patch })),
   }), [globals, voicePitches, percussion, cells, patches]);
 
-  const useScene = (index: number) => {
+  const handleScene = (index: number) => {
     const stored = scenes[index];
     if (!stored) {
       setScenes((current) => current.map((scene, position) => position === index ? cloneScene(currentScene()) : scene));
@@ -453,7 +456,7 @@ export default function HiDrone() {
                 type="button"
                 className={scene ? "has-scene" : ""}
                 key={index}
-                onClick={() => useScene(index)}
+                onClick={() => handleScene(index)}
                 title={scene ? "Recall stored scene" : "Store current state"}
               >
                 {String.fromCharCode(65 + index)}
