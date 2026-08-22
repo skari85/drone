@@ -10,6 +10,7 @@ type Voice = { id: number; name: string; base: number; tone: string; role: strin
 type Percussion = { id: number; name: string; role: string; tone: string };
 type Cell = { id: number; name: string; mode: CellMode; target: number; kind: 'voice' | 'perc'; interval: number; probability: number; colour: string };
 type Patch = { id: number; source: string; target: string; amount: number };
+type Preset = { name: string; genre: string; detail: string; macros: Macros; cells: Cell[] };
 type PerfEvent = { at: number; label: string; kind: EventKind };
 type VoiceNode = { carrier: OscillatorNode; shadow: OscillatorNode; mod: GainNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode };
 type Graph = { context: AudioContext; master: GainNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode; capture: MediaStreamAudioDestinationNode; voices: Map<number, VoiceNode> };
@@ -48,6 +49,105 @@ const initialPatches: Patch[] = [
 const defaultMacros = { tension: 34, movement: 38, density: 45, space: 46, damage: 22 };
 type Macros = typeof defaultMacros;
 
+const presets: Preset[] = [
+  {
+    name: 'First Pulse',
+    genre: 'ambient / dub',
+    detail: 'a steady body to enter through',
+    macros: { tension: 22, movement: 10, density: 64, space: 28, damage: 12 },
+    cells: [
+      { id: 0, name: 'Murmur', mode: 'pulse', target: 0, kind: 'voice', interval: 640, probability: 100, colour: 'moss' },
+      { id: 1, name: 'Static', mode: 'gate', target: 6, kind: 'voice', interval: 1280, probability: 82, colour: 'amber' },
+      { id: 2, name: 'Throb', mode: 'repeater', target: 0, kind: 'perc', interval: 480, probability: 100, colour: 'rose' },
+      { id: 3, name: 'Wake', mode: 'pulse', target: 3, kind: 'voice', interval: 1920, probability: 58, colour: 'ice' },
+      { id: 4, name: 'Crush', mode: 'delay', target: 2, kind: 'perc', interval: 960, probability: 44, colour: 'violet' },
+      { id: 5, name: 'Drift', mode: 'random', target: 5, kind: 'voice', interval: 2560, probability: 24, colour: 'lime' },
+      { id: 6, name: 'Ember', mode: 'pulse', target: 1, kind: 'perc', interval: 1280, probability: 68, colour: 'rust' },
+      { id: 7, name: 'Orbit', mode: 'repeater', target: 7, kind: 'voice', interval: 1920, probability: 34, colour: 'blue' },
+    ],
+  },
+  {
+    name: 'Slow Bloom',
+    genre: 'ambient / drone',
+    detail: 'wide air, long tones, fewer surprises',
+    macros: { tension: 28, movement: 6, density: 38, space: 76, damage: 8 },
+    cells: [
+      { id: 0, name: 'Murmur', mode: 'pulse', target: 0, kind: 'voice', interval: 1280, probability: 86, colour: 'moss' },
+      { id: 1, name: 'Static', mode: 'gate', target: 3, kind: 'voice', interval: 2560, probability: 52, colour: 'amber' },
+      { id: 2, name: 'Throb', mode: 'repeater', target: 0, kind: 'perc', interval: 960, probability: 60, colour: 'rose' },
+      { id: 3, name: 'Wake', mode: 'delay', target: 7, kind: 'voice', interval: 3200, probability: 38, colour: 'ice' },
+      { id: 4, name: 'Crush', mode: 'delay', target: 2, kind: 'perc', interval: 1920, probability: 28, colour: 'violet' },
+      { id: 5, name: 'Drift', mode: 'pulse', target: 5, kind: 'voice', interval: 2240, probability: 44, colour: 'lime' },
+      { id: 6, name: 'Ember', mode: 'pulse', target: 1, kind: 'perc', interval: 1600, probability: 24, colour: 'rust' },
+      { id: 7, name: 'Orbit', mode: 'gate', target: 7, kind: 'voice', interval: 3520, probability: 32, colour: 'blue' },
+    ],
+  },
+  {
+    name: 'Pressure Loop',
+    genre: 'industrial / rhythm',
+    detail: 'a tighter machine with teeth around the edges',
+    macros: { tension: 58, movement: 24, density: 78, space: 36, damage: 42 },
+    cells: [
+      { id: 0, name: 'Murmur', mode: 'pulse', target: 6, kind: 'voice', interval: 480, probability: 94, colour: 'moss' },
+      { id: 1, name: 'Static', mode: 'repeater', target: 1, kind: 'voice', interval: 960, probability: 62, colour: 'amber' },
+      { id: 2, name: 'Throb', mode: 'repeater', target: 1, kind: 'perc', interval: 480, probability: 100, colour: 'rose' },
+      { id: 3, name: 'Wake', mode: 'gate', target: 4, kind: 'voice', interval: 1440, probability: 72, colour: 'ice' },
+      { id: 4, name: 'Crush', mode: 'pulse', target: 3, kind: 'perc', interval: 960, probability: 76, colour: 'violet' },
+      { id: 5, name: 'Drift', mode: 'random', target: 5, kind: 'voice', interval: 1920, probability: 42, colour: 'lime' },
+      { id: 6, name: 'Ember', mode: 'pulse', target: 2, kind: 'perc', interval: 640, probability: 54, colour: 'rust' },
+      { id: 7, name: 'Orbit', mode: 'repeater', target: 7, kind: 'voice', interval: 1280, probability: 46, colour: 'blue' },
+    ],
+  },
+  {
+    name: 'Concrete Echo',
+    genre: 'dub techno / industrial',
+    detail: 'elastic low-end with a cold rim',
+    macros: { tension: 46, movement: 18, density: 66, space: 68, damage: 24 },
+    cells: [
+      { id: 0, name: 'Murmur', mode: 'pulse', target: 6, kind: 'voice', interval: 960, probability: 92, colour: 'moss' },
+      { id: 1, name: 'Static', mode: 'repeater', target: 1, kind: 'voice', interval: 1920, probability: 48, colour: 'amber' },
+      { id: 2, name: 'Throb', mode: 'repeater', target: 0, kind: 'perc', interval: 480, probability: 100, colour: 'rose' },
+      { id: 3, name: 'Wake', mode: 'gate', target: 3, kind: 'voice', interval: 2560, probability: 38, colour: 'ice' },
+      { id: 4, name: 'Crush', mode: 'delay', target: 2, kind: 'perc', interval: 960, probability: 54, colour: 'violet' },
+      { id: 5, name: 'Drift', mode: 'random', target: 4, kind: 'voice', interval: 3840, probability: 22, colour: 'lime' },
+      { id: 6, name: 'Ember', mode: 'pulse', target: 1, kind: 'perc', interval: 1920, probability: 70, colour: 'rust' },
+      { id: 7, name: 'Orbit', mode: 'repeater', target: 7, kind: 'voice', interval: 2880, probability: 30, colour: 'blue' },
+    ],
+  },
+  {
+    name: 'Salt Circle',
+    genre: 'ritual / percussion',
+    detail: 'a hand-played loop hiding inside the fog',
+    macros: { tension: 34, movement: 14, density: 74, space: 44, damage: 32 },
+    cells: [
+      { id: 0, name: 'Murmur', mode: 'pulse', target: 0, kind: 'voice', interval: 960, probability: 66, colour: 'moss' },
+      { id: 1, name: 'Static', mode: 'gate', target: 3, kind: 'voice', interval: 1920, probability: 42, colour: 'amber' },
+      { id: 2, name: 'Throb', mode: 'repeater', target: 0, kind: 'perc', interval: 480, probability: 100, colour: 'rose' },
+      { id: 3, name: 'Wake', mode: 'pulse', target: 6, kind: 'voice', interval: 1920, probability: 56, colour: 'ice' },
+      { id: 4, name: 'Crush', mode: 'pulse', target: 3, kind: 'perc', interval: 1280, probability: 68, colour: 'violet' },
+      { id: 5, name: 'Drift', mode: 'random', target: 2, kind: 'voice', interval: 2560, probability: 28, colour: 'lime' },
+      { id: 6, name: 'Ember', mode: 'repeater', target: 1, kind: 'perc', interval: 960, probability: 82, colour: 'rust' },
+      { id: 7, name: 'Orbit', mode: 'delay', target: 7, kind: 'voice', interval: 3200, probability: 30, colour: 'blue' },
+    ],
+  },
+  {
+    name: 'Blue Hour',
+    genre: 'cinematic / post-rock',
+    detail: 'slow harmonic light with a distant impact',
+    macros: { tension: 18, movement: 8, density: 34, space: 88, damage: 5 },
+    cells: [
+      { id: 0, name: 'Murmur', mode: 'pulse', target: 0, kind: 'voice', interval: 1600, probability: 80, colour: 'moss' },
+      { id: 1, name: 'Static', mode: 'gate', target: 3, kind: 'voice', interval: 3200, probability: 48, colour: 'amber' },
+      { id: 2, name: 'Throb', mode: 'repeater', target: 0, kind: 'perc', interval: 1920, probability: 36, colour: 'rose' },
+      { id: 3, name: 'Wake', mode: 'delay', target: 7, kind: 'voice', interval: 4480, probability: 30, colour: 'ice' },
+      { id: 4, name: 'Crush', mode: 'delay', target: 2, kind: 'perc', interval: 2560, probability: 22, colour: 'violet' },
+      { id: 5, name: 'Drift', mode: 'pulse', target: 5, kind: 'voice', interval: 2880, probability: 44, colour: 'lime' },
+      { id: 6, name: 'Ember', mode: 'pulse', target: 1, kind: 'perc', interval: 2240, probability: 20, colour: 'rust' },
+      { id: 7, name: 'Orbit', mode: 'gate', target: 6, kind: 'voice', interval: 3840, probability: 30, colour: 'blue' },
+    ],
+  },
+];
+
 const formatSeconds = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
 
 export default function Home() {
@@ -59,6 +159,7 @@ export default function Home() {
   const [heldPercs, setHeldPercs] = useState<number[]>([]);
   const [cells, setCells] = useState<Cell[]>(initialCells);
   const [patches, setPatches] = useState<Patch[]>(initialPatches);
+  const [activePreset, setActivePreset] = useState<string | null>(null);
   const [scenes, setScenes] = useState<Record<string, { macros: Macros; cells: Cell[]; patches: Patch[] }>>(() => {
     if (typeof window === 'undefined') return {};
     try { return JSON.parse(localStorage.getItem('hi-drone-scenes') || '{}'); } catch { return {}; }
@@ -217,8 +318,17 @@ export default function Home() {
   }, [addEvent, cells, macros, patches, scenes]);
   const loadScene = useCallback((slot: string) => {
     const scene = scenes[slot]; if (!scene) { saveScene(slot); return; }
-    setMacros(scene.macros); setCells(scene.cells); setPatches(scene.patches); setActiveScene(slot); addEvent(`scene ${slot} recalled`, 'scene'); setNotice(`scene ${slot} is breathing`);
+    setMacros(scene.macros); setCells(scene.cells); setPatches(scene.patches); setActiveScene(slot); setActivePreset(null); addEvent(`scene ${slot} recalled`, 'scene'); setNotice(`scene ${slot} is breathing`);
   }, [addEvent, saveScene, scenes]);
+
+  const applyPreset = useCallback((preset: Preset) => {
+    setMacros(preset.macros);
+    setCells(preset.cells.map((cell) => ({ ...cell })));
+    setActivePreset(preset.name);
+    setActiveScene(null);
+    addEvent(`preset ${preset.name}`, 'scene');
+    setNotice(`${preset.name}: ${preset.detail}`);
+  }, [addEvent]);
 
   const startCapture = useCallback(async () => {
     const graph = await ensureAudio();
@@ -259,6 +369,7 @@ export default function Home() {
   return <main className="instrument-shell">
     <header className="topbar"><div className="brand-lockup"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><div><h1>HI DRONE</h1><p>organismic composition station</p></div></div><div className="top-actions"><div className={`engine-state ${powered ? 'awake' : ''}`}><span aria-hidden="true" />{powered ? 'engine awake' : 'engine asleep'}</div><button className={`power-button ${powered ? 'is-on' : ''}`} type="button" onClick={togglePower}><span aria-hidden="true">◉</span> POWER</button></div></header>
     <section className="global-rack" aria-label="Global controls">{(Object.keys(macros) as Array<keyof Macros>).map((key) => <label className="macro-control" key={key}><span><b>{key}</b><output>{macros[key]}</output></span><input type="range" min="0" max="100" value={macros[key]} onChange={(event) => updateMacro(key, Number(event.target.value))} /></label>)}<div className="scene-bank" aria-label="Scenes"><span>SCENES</span><div>{slots.map((slot) => <button key={slot} type="button" className={activeScene === slot ? 'is-active' : ''} title={scenes[slot] ? `Recall scene ${slot}` : `Store scene ${slot}`} onClick={() => loadScene(slot)} onContextMenu={(event) => { event.preventDefault(); saveScene(slot); }}>{slot}</button>)}</div></div></section>
+    <section className="preset-rack" aria-label="Starting presets"><div className="preset-intro"><span>STARTING WEATHER</span><strong>Choose a pulse, then disturb it.</strong></div><div className="preset-list">{presets.map((preset) => <button key={preset.name} type="button" className={activePreset === preset.name ? 'is-active' : ''} onClick={() => applyPreset(preset)}><span>{preset.name}</span><small><b>{preset.genre}</b> · {preset.detail}</small></button>)}</div></section>
     <nav className="mode-tabs" aria-label="Instrument surfaces">{(['sound', 'behaviour', 'patch'] as Surface[]).map((item, index) => <button key={item} className={surface === item ? 'is-active' : ''} type="button" onClick={() => setSurface(item)}><span>0{index + 1}</span>{item}</button>)}</nav>
     <section className="working-surface">
       {surface === 'sound' && <div className="sound-surface"><div className="surface-heading"><div><span>DRONE FIELD</span><h2>Eight interacting voices</h2></div><p>Tap for a phrase. Latch to let a voice live.</p></div><div className="voice-grid">{voices.map((voice) => <article className={`voice-module tone-${voice.tone} ${activeVoices.includes(voice.id) ? 'is-active' : ''}`} key={voice.id}><div className="module-index">0{voice.id + 1}</div><button className="voice-pad" type="button" onClick={() => activateVoice(voice.id)}><span className="voice-core" aria-hidden="true" /><strong>{voice.name}</strong><small>{Math.round(voice.base * (0.94 + macros.tension / 100 * 0.12))} Hz · {voice.role}</small></button><label><span>TUNE <output>{Math.round(24 + (voice.base / 262) * 36)}</output></span><input aria-label={`${voice.name} tune`} type="range" min="24" max="76" defaultValue={Math.round(24 + (voice.base / 262) * 36)} /></label><button className={`latch-button ${latchedVoices.includes(voice.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleLatch(voice.id)}><span aria-hidden="true" />{latchedVoices.includes(voice.id) ? 'LATCHED' : 'LATCH'}</button></article>)}</div><div className="surface-heading percussion-heading"><div><span>PULSE FIELD</span><h2>Four percussive bodies</h2></div><p>Every impact can be held open as a drone.</p></div><div className="percussion-grid">{percussion.map((item) => <article className={`percussion-module ${item.tone}`} key={item.id}><button className="percussion-pad" type="button" onClick={() => triggerPercussion(item.id)}><span aria-hidden="true" /><strong>{item.name}</strong><small>{item.role}</small></button><label><span>DECAY <output>{48 + item.id * 10}</output></span><input aria-label={`${item.name} decay`} type="range" min="5" max="100" defaultValue={48 + item.id * 10} /></label><button className={`hold-button ${heldPercs.includes(item.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleHold(item.id)}>{heldPercs.includes(item.id) ? 'RELEASE DRONE' : 'HOLD AS DRONE'}</button></article>)}</div></div>}
