@@ -2,15 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-type Surface = 'sound' | 'behaviour' | 'patch';
+type Surface = 'sound' | 'sequence' | 'behaviour' | 'patch';
 type CellMode = 'pulse' | 'gate' | 'random' | 'delay' | 'repeater';
-type EventKind = 'voice' | 'pulse' | 'gesture' | 'patch' | 'scene';
+type EventKind = 'voice' | 'pulse' | 'sequence' | 'gesture' | 'patch' | 'scene';
+type ScaleName = 'minor' | 'dorian' | 'major' | 'pentatonic' | 'phrygian';
 
 type Voice = { id: number; name: string; base: number; tone: string; role: string };
 type Percussion = { id: number; name: string; role: string; tone: string };
 type Cell = { id: number; name: string; mode: CellMode; target: number; kind: 'voice' | 'perc'; interval: number; probability: number; colour: string };
 type Patch = { id: number; source: string; target: string; amount: number };
 type Preset = { name: string; genre: string; detail: string; macros: Macros; cells: Cell[] };
+type SequenceStep = { active: boolean; degree: number; octave: number; chance: number; accent: boolean };
+type SequenceTrack = { id: number; name: string; voice: number; colour: string; length: number; pulses: number; rotate: number; octave: number; range: number; chance: number; gate: number; muted: boolean; steps: SequenceStep[] };
+type SequenceWorld = { bpm: number; root: number; scale: ScaleName; swing: number; pulses: number[]; rotations: number[]; lengths: number[]; seed: number };
+type StoredScene = { macros: Macros; cells: Cell[]; patches: Patch[]; sequence?: { tracks: SequenceTrack[]; bpm: number; root: number; scale: ScaleName; swing: number } };
 type PerfEvent = { at: number; label: string; kind: EventKind };
 type VoiceNode = { carrier: OscillatorNode; shadow: OscillatorNode; mod: GainNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode };
 type Graph = { context: AudioContext; master: GainNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode; capture: MediaStreamAudioDestinationNode; voices: Map<number, VoiceNode> };
@@ -48,6 +53,51 @@ const initialPatches: Patch[] = [
 ];
 const defaultMacros = { tension: 34, movement: 38, density: 45, space: 46, damage: 22 };
 type Macros = typeof defaultMacros;
+
+const rootNames = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
+const scales: Record<ScaleName, { label: string; intervals: number[] }> = {
+  minor: { label: 'Natural minor', intervals: [0, 2, 3, 5, 7, 8, 10] },
+  dorian: { label: 'Dorian', intervals: [0, 2, 3, 5, 7, 9, 10] },
+  major: { label: 'Major', intervals: [0, 2, 4, 5, 7, 9, 11] },
+  pentatonic: { label: 'Minor pentatonic', intervals: [0, 3, 5, 7, 10] },
+  phrygian: { label: 'Phrygian', intervals: [0, 1, 3, 5, 7, 8, 10] },
+};
+const sequenceTrackTemplates = [
+  { id: 0, name: 'Root Path', voice: 0, colour: 'moss', octave: 0, range: 4, chance: 100, gate: 72 },
+  { id: 1, name: 'Glass Thread', voice: 1, colour: 'amber', octave: 1, range: 6, chance: 92, gate: 42 },
+  { id: 2, name: 'Choir Tide', voice: 3, colour: 'ice', octave: 1, range: 4, chance: 84, gate: 88 },
+  { id: 3, name: 'Moon Sparks', voice: 7, colour: 'blue', octave: 2, range: 7, chance: 78, gate: 28 },
+];
+
+const euclideanPattern = (length: number, pulses: number, rotate: number) => Array.from({ length: 16 }, (_, index) => {
+  if (index >= length) return false;
+  const shifted = (index - rotate + length * 2) % length;
+  return ((shifted * Math.min(pulses, length)) % length) < Math.min(pulses, length);
+});
+
+const buildSequenceTracks = (world: SequenceWorld): SequenceTrack[] => sequenceTrackTemplates.map((template, trackIndex) => {
+  const length = world.lengths[trackIndex];
+  const pulses = Math.min(world.pulses[trackIndex], length);
+  const rotate = world.rotations[trackIndex] % length;
+  const pattern = euclideanPattern(length, pulses, rotate);
+  return {
+    ...template,
+    length,
+    pulses,
+    rotate,
+    muted: false,
+    steps: pattern.map((active, stepIndex) => ({
+      active,
+      degree: (world.seed + trackIndex * 2 + stepIndex * (trackIndex + 1) + Math.floor(stepIndex / 4)) % template.range,
+      octave: stepIndex === 12 && trackIndex > 0 ? 1 : 0,
+      chance: 100,
+      accent: active && stepIndex % 4 === 0,
+    })),
+  };
+});
+
+const initialSequenceWorld: SequenceWorld = { bpm: 104, root: 2, scale: 'dorian', swing: 54, pulses: [5, 7, 3, 6], rotations: [0, 2, 1, 3], lengths: [16, 15, 12, 16], seed: 1 };
+const initialSequenceTracks = buildSequenceTracks(initialSequenceWorld);
 
 const presets: Preset[] = [
   {
@@ -148,7 +198,23 @@ const presets: Preset[] = [
   },
 ];
 
+const presetSequenceWorlds: Record<string, SequenceWorld> = {
+  'First Pulse': { bpm: 96, root: 0, scale: 'dorian', swing: 56, pulses: [4, 5, 3, 6], rotations: [0, 2, 0, 3], lengths: [16, 16, 12, 16], seed: 0 },
+  'Slow Bloom': { bpm: 72, root: 5, scale: 'pentatonic', swing: 50, pulses: [3, 4, 2, 3], rotations: [0, 3, 1, 5], lengths: [16, 15, 12, 16], seed: 2 },
+  'Pressure Loop': { bpm: 126, root: 1, scale: 'phrygian', swing: 52, pulses: [7, 9, 5, 11], rotations: [0, 1, 3, 5], lengths: [16, 16, 12, 15], seed: 1 },
+  'Concrete Echo': { bpm: 118, root: 3, scale: 'minor', swing: 58, pulses: [4, 7, 3, 5], rotations: [0, 3, 1, 7], lengths: [16, 15, 12, 16], seed: 3 },
+  'Salt Circle': { bpm: 108, root: 7, scale: 'dorian', swing: 61, pulses: [5, 8, 7, 9], rotations: [1, 3, 0, 4], lengths: [12, 16, 15, 16], seed: 4 },
+  'Blue Hour': { bpm: 78, root: 9, scale: 'major', swing: 50, pulses: [3, 5, 2, 4], rotations: [0, 2, 1, 6], lengths: [16, 15, 12, 16], seed: 1 },
+};
+
 const formatSeconds = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
+const midiToFrequency = (midi: number) => 440 * (2 ** ((midi - 69) / 12));
+const midiToLabel = (midi: number) => `${rootNames[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1}`;
+const sequenceStepMidi = (track: SequenceTrack, step: SequenceStep, root: number, scale: ScaleName) => {
+  const intervals = scales[scale].intervals;
+  const degree = Math.max(0, step.degree);
+  return 36 + root + intervals[degree % intervals.length] + 12 * (track.octave + step.octave + Math.floor(degree / intervals.length));
+};
 
 export default function Home() {
   const [surface, setSurface] = useState<Surface>('sound');
@@ -158,9 +224,21 @@ export default function Home() {
   const [latchedVoices, setLatchedVoices] = useState<number[]>([]);
   const [heldPercs, setHeldPercs] = useState<number[]>([]);
   const [cells, setCells] = useState<Cell[]>(initialCells);
+  const [behaviourRunning, setBehaviourRunning] = useState(false);
   const [patches, setPatches] = useState<Patch[]>(initialPatches);
   const [activePreset, setActivePreset] = useState<string | null>(null);
-  const [scenes, setScenes] = useState<Record<string, { macros: Macros; cells: Cell[]; patches: Patch[] }>>(() => {
+  const [sequenceTracks, setSequenceTracks] = useState<SequenceTrack[]>(initialSequenceTracks);
+  const [sequencerPlaying, setSequencerPlaying] = useState(false);
+  const [sequenceStep, setSequenceStep] = useState(-1);
+  const [sequenceCycle, setSequenceCycle] = useState(1);
+  const [bpm, setBpm] = useState(initialSequenceWorld.bpm);
+  const [root, setRoot] = useState(initialSequenceWorld.root);
+  const [scale, setScale] = useState<ScaleName>(initialSequenceWorld.scale);
+  const [swing, setSwing] = useState(initialSequenceWorld.swing);
+  const [selectedTrack, setSelectedTrack] = useState(0);
+  const [selectedSequenceStep, setSelectedSequenceStep] = useState(0);
+  const [evolveCount, setEvolveCount] = useState(0);
+  const [scenes, setScenes] = useState<Record<string, StoredScene>>(() => {
     if (typeof window === 'undefined') return {};
     try { return JSON.parse(localStorage.getItem('hi-drone-scenes') || '{}'); } catch { return {}; }
   });
@@ -176,6 +254,13 @@ export default function Home() {
   const graphRef = useRef<Graph | null>(null);
   const cellsRef = useRef(cells);
   const macrosRef = useRef(macros);
+  const sequenceTracksRef = useRef(sequenceTracks);
+  const bpmRef = useRef(bpm);
+  const rootRef = useRef(root);
+  const scaleRef = useRef(scale);
+  const swingRef = useRef(swing);
+  const sequenceClockRef = useRef(0);
+  const sequenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const captureStartedRef = useRef(0);
   const captureTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clockRef = useRef(0);
@@ -184,6 +269,11 @@ export default function Home() {
 
   useEffect(() => { cellsRef.current = cells; }, [cells]);
   useEffect(() => { macrosRef.current = macros; }, [macros]);
+  useEffect(() => { sequenceTracksRef.current = sequenceTracks; }, [sequenceTracks]);
+  useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+  useEffect(() => { rootRef.current = root; }, [root]);
+  useEffect(() => { scaleRef.current = scale; }, [scale]);
+  useEffect(() => { swingRef.current = swing; }, [swing]);
 
   const addEvent = useCallback((label: string, kind: EventKind) => {
     const at = captureStartedRef.current ? Date.now() - captureStartedRef.current : Date.now();
@@ -283,13 +373,96 @@ export default function Home() {
     addEvent(`${item.name} / ${origin}`, 'pulse'); setNotice(`${item.name} struck the field`);
   }, [addEvent, ensureAudio]);
 
+  const triggerSequenceNote = useCallback(async (track: SequenceTrack, midi: number, step: SequenceStep) => {
+    const graph = await ensureAudio();
+    const now = graph.context.currentTime;
+    const frequency = midiToFrequency(midi);
+    const carrier = graph.context.createOscillator();
+    const shadow = graph.context.createOscillator();
+    const filter = graph.context.createBiquadFilter();
+    const gain = graph.context.createGain();
+    const panner = graph.context.createStereoPanner();
+    const voice = voices[track.voice];
+    carrier.type = track.id === 0 ? 'triangle' : track.id === 1 ? 'sine' : track.id === 2 ? 'sawtooth' : 'square';
+    shadow.type = track.id < 2 ? 'sine' : 'triangle';
+    carrier.frequency.value = frequency;
+    shadow.frequency.value = frequency * (track.id === 2 ? 1.502 : 1.003 + track.id * 0.0015);
+    filter.type = track.id === 1 ? 'bandpass' : 'lowpass';
+    filter.frequency.value = Math.min(7200, 540 + frequency * (2.1 + macrosRef.current.movement / 45));
+    filter.Q.value = 0.9 + macrosRef.current.tension / 28;
+    panner.pan.value = [-0.28, 0.3, -0.08, 0.42][track.id];
+    const stepLength = 60 / bpmRef.current / 4;
+    const duration = Math.max(0.08, stepLength * (0.32 + track.gate / 42));
+    const peak = (step.accent ? 0.13 : 0.082) + macrosRef.current.density / 2400;
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.018, peak * 0.45), now + Math.min(0.12, duration * 0.4));
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+    carrier.connect(filter); shadow.connect(filter); filter.connect(gain); gain.connect(panner); panner.connect(graph.master);
+    carrier.start(now); shadow.start(now); carrier.stop(now + duration + 0.04); shadow.stop(now + duration + 0.04);
+    addEvent(`${voice.name} ${midiToLabel(midi)}`, 'sequence');
+  }, [addEvent, ensureAudio]);
+
   const togglePower = useCallback(async () => {
-    if (powered) { graphRef.current?.context.suspend(); setPowered(false); setNotice('engine asleep'); addEvent('engine asleep', 'gesture'); return; }
+    if (powered) { graphRef.current?.context.suspend(); setPowered(false); setSequencerPlaying(false); setNotice('engine asleep'); addEvent('engine asleep', 'gesture'); return; }
     await ensureAudio(); setPowered(true); setNotice('engine awake — touch a body'); addEvent('engine awake', 'gesture');
   }, [addEvent, ensureAudio, powered]);
 
+  const toggleSequencer = useCallback(async () => {
+    if (sequencerPlaying) {
+      setSequencerPlaying(false);
+      setSequenceStep(-1);
+      setNotice('melodic current paused');
+      addEvent('sequencer paused', 'gesture');
+      return;
+    }
+    await ensureAudio();
+    sequenceClockRef.current = 0;
+    setPowered(true);
+    setSequencerPlaying(true);
+    setNotice(`${rootNames[rootRef.current]} ${scales[scaleRef.current].label} current moving`);
+    addEvent('sequencer started', 'gesture');
+  }, [addEvent, ensureAudio, sequencerPlaying]);
+
   useEffect(() => {
-    if (!powered) return;
+    if (!powered || !sequencerPlaying) return;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      const absoluteStep = sequenceClockRef.current;
+      const stepIndex = absoluteStep % 16;
+      const cycleIndex = Math.floor(absoluteStep / 16) % 4;
+      const scaleIntervals = scales[scaleRef.current].intervals;
+      setSequenceStep(stepIndex);
+      setSequenceCycle(cycleIndex + 1);
+      sequenceTracksRef.current.forEach((track) => {
+        if (track.muted) return;
+        const localIndex = stepIndex % track.length;
+        const step = track.steps[localIndex];
+        if (!step?.active || Math.random() * 10000 > track.chance * step.chance) return;
+        const cycleMotion = cycleIndex === 1 && track.id % 2 === 1 ? 1 : cycleIndex === 2 ? (track.id + 1) % 3 : 0;
+        const degree = Math.max(0, step.degree + cycleMotion);
+        const scaleOctave = Math.floor(degree / scaleIntervals.length);
+        const interval = scaleIntervals[degree % scaleIntervals.length];
+        const midi = 36 + rootRef.current + interval + 12 * (track.octave + step.octave + scaleOctave);
+        triggerSequenceNote(track, midi, step);
+      });
+      if (stepIndex === 0) setNotice(`phrase cycle ${cycleIndex + 1}/4 · ${rootNames[rootRef.current]} ${scales[scaleRef.current].label}`);
+      sequenceClockRef.current += 1;
+      const baseStep = 60000 / bpmRef.current / 4;
+      const swingDepth = Math.max(0, (swingRef.current - 50) / 50) * 0.42;
+      const nextDelay = baseStep * (stepIndex % 2 === 0 ? 1 + swingDepth : 1 - swingDepth);
+      sequenceTimerRef.current = setTimeout(tick, nextDelay);
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (sequenceTimerRef.current) clearTimeout(sequenceTimerRef.current);
+    };
+  }, [powered, sequencerPlaying, triggerSequenceNote]);
+
+  useEffect(() => {
+    if (!powered || !behaviourRunning) return;
     clockRef.current = 0;
     const interval = setInterval(() => {
       clockRef.current += 80;
@@ -304,7 +477,7 @@ export default function Home() {
       });
     }, 80);
     return () => clearInterval(interval);
-  }, [activateVoice, powered, stopVoice, triggerPercussion]);
+  }, [activateVoice, behaviourRunning, powered, stopVoice, triggerPercussion]);
 
   useEffect(() => {
     if (!graphRef.current) return;
@@ -314,16 +487,20 @@ export default function Home() {
   }, [powered]);
 
   const saveScene = useCallback((slot: string) => {
-    const next = { ...scenes, [slot]: { macros, cells, patches } }; setScenes(next); setActiveScene(slot); localStorage.setItem('hi-drone-scenes', JSON.stringify(next)); addEvent(`scene ${slot} stored`, 'scene'); setNotice(`scene ${slot} held in local memory`);
-  }, [addEvent, cells, macros, patches, scenes]);
+    const next = { ...scenes, [slot]: { macros, cells, patches, sequence: { tracks: sequenceTracks, bpm, root, scale, swing } } }; setScenes(next); setActiveScene(slot); localStorage.setItem('hi-drone-scenes', JSON.stringify(next)); addEvent(`scene ${slot} stored`, 'scene'); setNotice(`scene ${slot} held in local memory`);
+  }, [addEvent, bpm, cells, macros, patches, root, scale, scenes, sequenceTracks, swing]);
   const loadScene = useCallback((slot: string) => {
     const scene = scenes[slot]; if (!scene) { saveScene(slot); return; }
-    setMacros(scene.macros); setCells(scene.cells); setPatches(scene.patches); setActiveScene(slot); setActivePreset(null); addEvent(`scene ${slot} recalled`, 'scene'); setNotice(`scene ${slot} is breathing`);
+    setMacros(scene.macros); setCells(scene.cells); setPatches(scene.patches);
+    if (scene.sequence) { setSequenceTracks(scene.sequence.tracks); setBpm(scene.sequence.bpm); setRoot(scene.sequence.root); setScale(scene.sequence.scale); setSwing(scene.sequence.swing); }
+    setActiveScene(slot); setActivePreset(null); addEvent(`scene ${slot} recalled`, 'scene'); setNotice(`scene ${slot} is breathing`);
   }, [addEvent, saveScene, scenes]);
 
   const applyPreset = useCallback((preset: Preset) => {
+    const world = presetSequenceWorlds[preset.name];
     setMacros(preset.macros);
     setCells(preset.cells.map((cell) => ({ ...cell })));
+    if (world) { setSequenceTracks(buildSequenceTracks(world)); setBpm(world.bpm); setRoot(world.root); setScale(world.scale); setSwing(world.swing); }
     setActivePreset(preset.name);
     setActiveScene(null);
     addEvent(`preset ${preset.name}`, 'scene');
@@ -347,6 +524,47 @@ export default function Home() {
   const updateMacro = (key: keyof Macros, value: number) => { setMacros((previous) => ({ ...previous, [key]: value })); addEvent(`${key} ${value}`, 'gesture'); };
   const toggleLatch = (id: number) => { setLatchedVoices((previous) => previous.includes(id) ? previous.filter((voiceId) => voiceId !== id) : [...previous, id]); addEvent(`${voices[id].name} latch`, 'gesture'); };
   const toggleHold = (id: number) => { setHeldPercs((previous) => previous.includes(id) ? previous.filter((percId) => percId !== id) : [...previous, id]); addEvent(`${percussion[id].name} ${heldPercs.includes(id) ? 'released' : 'held as drone'}`, 'gesture'); };
+  const updateTrackStructure = (id: number, key: 'length' | 'pulses' | 'rotate', value: number) => {
+    setSequenceTracks((previous) => previous.map((track) => {
+      if (track.id !== id) return track;
+      const length = key === 'length' ? value : track.length;
+      const pulses = Math.min(key === 'pulses' ? value : track.pulses, length);
+      const rotate = (key === 'rotate' ? value : track.rotate) % length;
+      const pattern = euclideanPattern(length, pulses, rotate);
+      return { ...track, length, pulses, rotate, steps: track.steps.map((step, index) => ({ ...step, active: pattern[index] })) };
+    }));
+  };
+  const updateTrackValue = (id: number, key: 'octave' | 'range' | 'chance' | 'gate', value: number) => {
+    setSequenceTracks((previous) => previous.map((track) => track.id === id ? { ...track, [key]: value } : track));
+  };
+  const toggleTrackMute = (id: number) => setSequenceTracks((previous) => previous.map((track) => track.id === id ? { ...track, muted: !track.muted } : track));
+  const toggleSequenceStep = (trackId: number, index: number) => {
+    setSelectedTrack(trackId); setSelectedSequenceStep(index);
+    setSequenceTracks((previous) => previous.map((track) => track.id === trackId ? { ...track, steps: track.steps.map((step, stepIndex) => stepIndex === index ? { ...step, active: !step.active } : step) } : track));
+  };
+  const updateSelectedStep = (changes: Partial<SequenceStep>) => {
+    setSequenceTracks((previous) => previous.map((track) => track.id === selectedTrack ? { ...track, steps: track.steps.map((step, index) => index === selectedSequenceStep ? { ...step, ...changes } : step) } : track));
+  };
+  const reseedTrack = (id: number) => {
+    const generation = evolveCount + 1;
+    setEvolveCount(generation);
+    setSequenceTracks((previous) => previous.map((track) => track.id === id ? { ...track, steps: track.steps.map((step, index) => ({ ...step, degree: (index * (id + 1) + generation + Math.floor(index / 4)) % track.range })) } : track));
+    addEvent(`track ${id + 1} melody reseeded`, 'gesture');
+  };
+  const evolveSequence = () => {
+    const generation = evolveCount + 1;
+    setEvolveCount(generation);
+    setSequenceTracks((previous) => previous.map((track) => {
+      const rotate = (track.rotate + 1 + (track.id % 2)) % track.length;
+      const pattern = euclideanPattern(track.length, track.pulses, rotate);
+      return { ...track, rotate, steps: track.steps.map((step, index) => ({ ...step, active: pattern[index], degree: step.active && (index + generation + track.id) % 4 === 0 ? (step.degree + 1) % track.range : step.degree })) };
+    }));
+    setNotice(`variation ${generation} folded into the phrase`); addEvent(`sequence evolved ${generation}`, 'sequence');
+  };
+  const toggleBehaviourNetwork = useCallback(async () => {
+    if (behaviourRunning) { setBehaviourRunning(false); setNotice('behaviour cells sleeping — sequence remains clear'); return; }
+    await ensureAudio(); setPowered(true); setBehaviourRunning(true); setNotice('behaviour cells joined the sequence');
+  }, [behaviourRunning, ensureAudio]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -356,27 +574,68 @@ export default function Home() {
         if (captureState === 'recording') stopCapture();
         else startCapture();
       }
+      if (event.key.toLowerCase() === 'p') toggleSequencer();
       if (/^[1-8]$/.test(event.key)) activateVoice(Number(event.key) - 1);
-      if (event.key === '[') setSurface('sound'); if (event.key === ']') setSurface('behaviour'); if (event.key === '\\') setSurface('patch');
+      if (event.key.toLowerCase() === 'q' || event.key === '[') setSurface('sound');
+      if (event.key.toLowerCase() === 'w' || event.key === ']') setSurface('sequence');
+      if (event.key.toLowerCase() === 'e') setSurface('behaviour');
+      if (event.key.toLowerCase() === 't' || event.key === '\\') setSurface('patch');
     };
     window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
-  }, [activateVoice, captureState, startCapture, stopCapture, togglePower]);
+  }, [activateVoice, captureState, startCapture, stopCapture, togglePower, toggleSequencer]);
 
   const timeline = useMemo(() => events.slice(-14), [events]);
   const slots = ['A', 'B', 'C', 'D'];
   const modes: CellMode[] = ['pulse', 'gate', 'random', 'delay', 'repeater'];
+  const selectedTrackData = sequenceTracks[selectedTrack];
+  const selectedStepData = selectedTrackData.steps[selectedSequenceStep];
+  const selectedScale = scales[scale];
+  const selectedDegree = Math.max(0, selectedStepData.degree);
+  const selectedMidi = 36 + root + selectedScale.intervals[selectedDegree % selectedScale.intervals.length] + 12 * (selectedTrackData.octave + selectedStepData.octave + Math.floor(selectedDegree / selectedScale.intervals.length));
 
   return <main className="instrument-shell">
     <header className="topbar"><div className="brand-lockup"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><div><h1>HI DRONE</h1><p>organismic composition station</p></div></div><div className="top-actions"><div className={`engine-state ${powered ? 'awake' : ''}`}><span aria-hidden="true" />{powered ? 'engine awake' : 'engine asleep'}</div><button className={`power-button ${powered ? 'is-on' : ''}`} type="button" onClick={togglePower}><span aria-hidden="true">◉</span> POWER</button></div></header>
     <section className="global-rack" aria-label="Global controls">{(Object.keys(macros) as Array<keyof Macros>).map((key) => <label className="macro-control" key={key}><span><b>{key}</b><output>{macros[key]}</output></span><input type="range" min="0" max="100" value={macros[key]} onChange={(event) => updateMacro(key, Number(event.target.value))} /></label>)}<div className="scene-bank" aria-label="Scenes"><span>SCENES</span><div>{slots.map((slot) => <button key={slot} type="button" className={activeScene === slot ? 'is-active' : ''} title={scenes[slot] ? `Recall scene ${slot}` : `Store scene ${slot}`} onClick={() => loadScene(slot)} onContextMenu={(event) => { event.preventDefault(); saveScene(slot); }}>{slot}</button>)}</div></div></section>
     <section className="preset-rack" aria-label="Starting presets"><div className="preset-intro"><span>STARTING WEATHER</span><strong>Choose a pulse, then disturb it.</strong></div><div className="preset-list">{presets.map((preset) => <button key={preset.name} type="button" className={activePreset === preset.name ? 'is-active' : ''} onClick={() => applyPreset(preset)}><span>{preset.name}</span><small><b>{preset.genre}</b> · {preset.detail}</small></button>)}</div></section>
-    <nav className="mode-tabs" aria-label="Instrument surfaces">{(['sound', 'behaviour', 'patch'] as Surface[]).map((item, index) => <button key={item} className={surface === item ? 'is-active' : ''} type="button" onClick={() => setSurface(item)}><span>0{index + 1}</span>{item}</button>)}</nav>
+    <nav className="mode-tabs" aria-label="Instrument surfaces">{(['sound', 'sequence', 'behaviour', 'patch'] as Surface[]).map((item, index) => <button key={item} className={surface === item ? 'is-active' : ''} type="button" onClick={() => setSurface(item)}><span>0{index + 1}</span>{item}</button>)}</nav>
     <section className="working-surface">
+      {surface === 'sequence' && <div className="sequence-surface">
+        <div className="surface-heading"><div><span>MELODIC CURRENT</span><h2>Four paths through one scale</h2></div><p>Build a pulse, choose its notes, then let four cycles develop the phrase.</p></div>
+        <section className="transport-deck" aria-label="Sequencer transport">
+          <button className={`transport-button ${sequencerPlaying ? 'is-playing' : ''}`} type="button" onClick={toggleSequencer}><span aria-hidden="true">{sequencerPlaying ? '■' : '▶'}</span>{sequencerPlaying ? 'PAUSE CURRENT' : 'START CURRENT'}</button>
+          <div className="transport-readout"><span>PHRASE CYCLE</span><strong>{sequenceCycle} / 4</strong><small>{sequenceStep >= 0 ? `step ${sequenceStep + 1}` : 'waiting'}</small></div>
+          <label className="sequence-control"><span>TEMPO <output>{bpm} BPM</output></span><input aria-label="Tempo" type="range" min="50" max="180" value={bpm} onChange={(event) => setBpm(Number(event.target.value))} /></label>
+          <label className="sequence-control"><span>SWING <output>{swing}%</output></span><input aria-label="Swing" type="range" min="50" max="72" value={swing} onChange={(event) => setSwing(Number(event.target.value))} /></label>
+          <label className="sequence-select"><span>ROOT</span><select aria-label="Root note" value={root} onChange={(event) => setRoot(Number(event.target.value))}>{rootNames.map((name, index) => <option value={index} key={name}>{name}</option>)}</select></label>
+          <label className="sequence-select"><span>SCALE</span><select aria-label="Musical scale" value={scale} onChange={(event) => setScale(event.target.value as ScaleName)}>{(Object.keys(scales) as ScaleName[]).map((name) => <option value={name} key={name}>{scales[name].label}</option>)}</select></label>
+          <button className="evolve-button" type="button" onClick={evolveSequence}><span>↻</span> EVOLVE PHRASE<small>controlled variation {evolveCount}</small></button>
+        </section>
+        <section className="sequencer-board" aria-label="Four track step sequencer">
+          <div className="beat-ruler" aria-hidden="true"><span /><div>{Array.from({ length: 16 }, (_, index) => <i className={index % 4 === 0 ? 'bar-start' : ''} key={index}>{index + 1}</i>)}</div></div>
+          {sequenceTracks.map((track) => <article className={`sequence-lane lane-${track.colour} ${selectedTrack === track.id ? 'is-selected' : ''} ${track.muted ? 'is-muted' : ''}`} key={track.id}>
+            <div className="lane-identity"><button className="lane-select" type="button" onClick={() => { setSelectedTrack(track.id); setSelectedSequenceStep(Math.min(selectedSequenceStep, track.length - 1)); }}><i aria-hidden="true" /><span><strong>{track.name}</strong><small>{voices[track.voice].name} · {track.pulses}/{track.length}</small></span></button><button className="lane-mute" type="button" aria-pressed={track.muted} onClick={() => toggleTrackMute(track.id)}>{track.muted ? 'MUTED' : 'MUTE'}</button></div>
+            <div className="step-grid">{track.steps.map((step, index) => <button key={index} type="button" disabled={index >= track.length} className={`sequence-cell ${step.active ? 'is-active' : ''} ${step.accent ? 'is-accented' : ''} ${selectedTrack === track.id && selectedSequenceStep === index ? 'is-selected' : ''} ${sequencerPlaying && sequenceStep % track.length === index ? 'is-current' : ''}`} aria-label={`${track.name} step ${index + 1}, ${step.active ? midiToLabel(sequenceStepMidi(track, step, root, scale)) : 'off'}`} onClick={() => toggleSequenceStep(track.id, index)}><span>{index + 1}</span><strong>{step.active ? midiToLabel(sequenceStepMidi(track, step, root, scale)) : '·'}</strong><i aria-hidden="true" /></button>)}</div>
+          </article>)}
+        </section>
+        <section className="sequence-editors">
+          <div className="track-sculptor"><div className="editor-heading"><span>TRACK SHAPE</span><strong>{selectedTrackData.name}</strong><button type="button" onClick={() => reseedTrack(selectedTrackData.id)}>RESEED NOTES</button></div><div className="track-controls">
+            <label><span>STEPS <output>{selectedTrackData.length}</output></span><input type="range" min="4" max="16" value={selectedTrackData.length} onChange={(event) => updateTrackStructure(selectedTrackData.id, 'length', Number(event.target.value))} /></label>
+            <label><span>PULSES <output>{selectedTrackData.pulses}</output></span><input type="range" min="0" max={selectedTrackData.length} value={selectedTrackData.pulses} onChange={(event) => updateTrackStructure(selectedTrackData.id, 'pulses', Number(event.target.value))} /></label>
+            <label><span>ROTATE <output>{selectedTrackData.rotate}</output></span><input type="range" min="0" max={selectedTrackData.length - 1} value={selectedTrackData.rotate} onChange={(event) => updateTrackStructure(selectedTrackData.id, 'rotate', Number(event.target.value))} /></label>
+            <label><span>OCTAVE <output>+{selectedTrackData.octave}</output></span><input type="range" min="0" max="2" value={selectedTrackData.octave} onChange={(event) => updateTrackValue(selectedTrackData.id, 'octave', Number(event.target.value))} /></label>
+            <label><span>NOTE RANGE <output>{selectedTrackData.range}</output></span><input type="range" min="1" max="8" value={selectedTrackData.range} onChange={(event) => updateTrackValue(selectedTrackData.id, 'range', Number(event.target.value))} /></label>
+            <label><span>TRACK CHANCE <output>{selectedTrackData.chance}%</output></span><input type="range" min="0" max="100" value={selectedTrackData.chance} onChange={(event) => updateTrackValue(selectedTrackData.id, 'chance', Number(event.target.value))} /></label>
+            <label><span>GATE <output>{selectedTrackData.gate}%</output></span><input type="range" min="10" max="100" value={selectedTrackData.gate} onChange={(event) => updateTrackValue(selectedTrackData.id, 'gate', Number(event.target.value))} /></label>
+          </div></div>
+          <div className="step-inspector"><div className="editor-heading"><span>STEP {String(selectedSequenceStep + 1).padStart(2, '0')}</span><strong>{midiToLabel(selectedMidi)}</strong><button className={selectedStepData.active ? 'is-on' : ''} type="button" onClick={() => updateSelectedStep({ active: !selectedStepData.active })}>{selectedStepData.active ? 'ACTIVE' : 'OFF'}</button></div><div className="pitch-steppers"><button type="button" aria-label="Lower note" onClick={() => updateSelectedStep({ degree: Math.max(0, selectedStepData.degree - 1) })}>−</button><div><span>SCALE DEGREE</span><strong>{selectedStepData.degree + 1}</strong><small>{rootNames[root]} {selectedScale.label}</small></div><button type="button" aria-label="Raise note" onClick={() => updateSelectedStep({ degree: Math.min(14, selectedStepData.degree + 1) })}>+</button></div><div className="step-detail-controls"><label><span>STEP OCTAVE <output>{selectedStepData.octave > 0 ? `+${selectedStepData.octave}` : selectedStepData.octave}</output></span><input type="range" min="-1" max="1" value={selectedStepData.octave} onChange={(event) => updateSelectedStep({ octave: Number(event.target.value) })} /></label><label><span>STEP CHANCE <output>{selectedStepData.chance}%</output></span><input type="range" min="0" max="100" value={selectedStepData.chance} onChange={(event) => updateSelectedStep({ chance: Number(event.target.value) })} /></label><button className={selectedStepData.accent ? 'is-on' : ''} type="button" onClick={() => updateSelectedStep({ accent: !selectedStepData.accent })}>{selectedStepData.accent ? 'ACCENT ON' : 'ADD ACCENT'}</button></div></div>
+        </section>
+      </div>}
+      {surface === 'behaviour' && <div className="behaviour-switch"><div><span>CELL AUTONOMY</span><strong>{behaviourRunning ? 'Cells are moving beside the melody' : 'Cells are sleeping'}</strong><small>Keep this off for a clear sequence; wake it when you want organic interference.</small></div><button className={behaviourRunning ? 'is-on' : ''} type="button" onClick={toggleBehaviourNetwork}>{behaviourRunning ? 'LET CELLS SLEEP' : 'WAKE CELLS'}</button></div>}
       {surface === 'sound' && <div className="sound-surface"><div className="surface-heading"><div><span>DRONE FIELD</span><h2>Eight interacting voices</h2></div><p>Tap for a phrase. Latch to let a voice live.</p></div><div className="voice-grid">{voices.map((voice) => <article className={`voice-module tone-${voice.tone} ${activeVoices.includes(voice.id) ? 'is-active' : ''}`} key={voice.id}><div className="module-index">0{voice.id + 1}</div><button className="voice-pad" type="button" onClick={() => activateVoice(voice.id)}><span className="voice-core" aria-hidden="true" /><strong>{voice.name}</strong><small>{Math.round(voice.base * (0.94 + macros.tension / 100 * 0.12))} Hz · {voice.role}</small></button><label><span>TUNE <output>{Math.round(24 + (voice.base / 262) * 36)}</output></span><input aria-label={`${voice.name} tune`} type="range" min="24" max="76" defaultValue={Math.round(24 + (voice.base / 262) * 36)} /></label><button className={`latch-button ${latchedVoices.includes(voice.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleLatch(voice.id)}><span aria-hidden="true" />{latchedVoices.includes(voice.id) ? 'LATCHED' : 'LATCH'}</button></article>)}</div><div className="surface-heading percussion-heading"><div><span>PULSE FIELD</span><h2>Four percussive bodies</h2></div><p>Every impact can be held open as a drone.</p></div><div className="percussion-grid">{percussion.map((item) => <article className={`percussion-module ${item.tone}`} key={item.id}><button className="percussion-pad" type="button" onClick={() => triggerPercussion(item.id)}><span aria-hidden="true" /><strong>{item.name}</strong><small>{item.role}</small></button><label><span>DECAY <output>{48 + item.id * 10}</output></span><input aria-label={`${item.name} decay`} type="range" min="5" max="100" defaultValue={48 + item.id * 10} /></label><button className={`hold-button ${heldPercs.includes(item.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleHold(item.id)}>{heldPercs.includes(item.id) ? 'RELEASE DRONE' : 'HOLD AS DRONE'}</button></article>)}</div></div>}
       {surface === 'behaviour' && <div className="behaviour-surface"><div className="surface-heading"><div><span>BEHAVIOUR NETWORK</span><h2>Eight cells with unfinished plans</h2></div><p>Cells drift, wake each other and forget what they meant to do.</p></div><div className="network-field"><div className="network-lines" aria-hidden="true"><i /><i /><i /><i /><i /></div>{cells.map((cell) => <article className={`cell cell-${cell.colour} ${pulse === cell.id ? 'is-pulsing' : ''}`} key={cell.id}><div className="cell-orbit" /><div className="cell-head"><span>0{cell.id + 1}</span><strong>{cell.name}</strong><b>{cell.mode}</b></div><div className="cell-body"><div className="cell-target">{cell.kind === 'voice' ? voices[cell.target]?.name : percussion[cell.target]?.name}</div><div className="cell-stats"><span>{cell.interval}ms</span><span>{cell.probability}% chance</span></div></div><label><span>PROBABILITY <output>{cell.probability}</output></span><input type="range" min="0" max="100" value={cell.probability} onChange={(event) => setCells((previous) => previous.map((entry) => entry.id === cell.id ? { ...entry, probability: Number(event.target.value) } : entry))} /></label><select aria-label={`${cell.name} mode`} value={cell.mode} onChange={(event) => setCells((previous) => previous.map((entry) => entry.id === cell.id ? { ...entry, mode: event.target.value as CellMode } : entry))}>{modes.map((mode) => <option key={mode}>{mode}</option>)}</select></article>)}</div></div>}
       {surface === 'patch' && <div className="patch-surface"><div className="surface-heading"><div><span>PATCH WEATHER</span><h2>Three connections are awake</h2></div><p>Drag the atmosphere through the instrument. Nothing is permanent.</p></div><div className="patch-grid"><div className="patch-column"><span className="column-label">SOURCES</span>{['Breath A', 'Breath B', 'Uncertainty', 'Feedback weather'].map((source) => <button className="patch-node source" key={source} type="button"><i />{source}<small>signal</small></button>)}</div><div className="patch-visual" aria-hidden="true"><div className="signal signal-one" /><div className="signal signal-two" /><div className="signal signal-three" /></div><div className="patch-column"><span className="column-label">TARGETS</span>{['Voice pairs', 'Filter', 'Delay', 'Drive'].map((target) => <button className="patch-node target" key={target} type="button"><i />{target}<small>destination</small></button>)}</div></div><div className="cable-list">{patches.map((patch) => <article className="cable" key={patch.id}><span className="cable-dot" /><strong>{patch.source}</strong><span className="cable-arrow">→</span><strong>{patch.target}</strong><label><span>AMOUNT <output>{patch.amount}</output></span><input type="range" min="-100" max="100" value={patch.amount} onChange={(event) => setPatches((previous) => previous.map((entry) => entry.id === patch.id ? { ...entry, amount: Number(event.target.value) } : entry))} /></label><button type="button" onClick={() => setPatches((previous) => previous.filter((entry) => entry.id !== patch.id))}>REMOVE</button></article>)}</div></div>}
     </section>
-    <section className="telemetry-rack"><div className="telemetry-label"><span>FIELD TELEMETRY</span><strong>{notice}</strong></div><div className="meter" aria-label={`audio activity ${meter}%`}><span style={{ width: `${meter}%` }} /></div><div className="shortcut-hint">SPACE power · 1–8 voices · R capture · [ ] \\ surfaces</div></section>
+    <section className="telemetry-rack"><div className="telemetry-label"><span>FIELD TELEMETRY</span><strong>{notice}</strong></div><div className="meter" aria-label={`audio activity ${meter}%`}><span style={{ width: `${meter}%` }} /></div><div className="shortcut-hint">P sequence · SPACE power · 1–8 voices · Q W E T surfaces · R capture</div></section>
     <section className="timeline-rack"><div className="timeline-heading"><span>EVENT WEATHER</span><strong>{timeline.length ? `${timeline.length} gestures in memory` : 'waiting for a first disturbance'}</strong></div><div className="timeline-track">{timeline.map((event, index) => <div className={`timeline-event ${event.kind}`} key={`${event.at}-${index}`} style={{ left: `${Math.min(96, (index / Math.max(1, timeline.length - 1)) * 92 + 2)}%` }} title={event.label}><i /><span>{event.label}</span></div>)}</div></section>
     <footer className={`capture-rack ${captureState === 'recording' ? 'is-recording' : ''}`}><div className="capture-status"><div className="capture-light" aria-hidden="true" /><div><span>{captureState === 'recording' ? 'CAPTURING PERFORMANCE' : captureState === 'held' ? 'PERFORMANCE HELD' : 'CAPTURE READY'}</span><strong>{captureState === 'recording' ? formatSeconds(captureSeconds) : take ? formatSeconds(captureSeconds) : '00:00'}</strong></div><small>{captureState === 'recording' ? `${events.length} gestures` : 'Audio + gesture memory stays local.'}</small></div><div className="capture-actions">{captureState === 'recording' ? <button className="stop-button" type="button" onClick={stopCapture}>■ STOP</button> : <><button className="record-button" type="button" onClick={startCapture}><span aria-hidden="true" />CAPTURE</button><button className="save-moment" type="button" onClick={saveLastMoment}>SAVE LAST MOMENT</button></>}{take && <><button type="button" onClick={() => downloadTake('webm')}>AUDIO</button><button type="button" onClick={() => downloadTake('webm')}>EXPORT</button></>}</div></footer>
   </main>;
