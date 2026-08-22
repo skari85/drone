@@ -238,10 +238,7 @@ export default function Home() {
   const [selectedTrack, setSelectedTrack] = useState(0);
   const [selectedSequenceStep, setSelectedSequenceStep] = useState(0);
   const [evolveCount, setEvolveCount] = useState(0);
-  const [scenes, setScenes] = useState<Record<string, StoredScene>>(() => {
-    if (typeof window === 'undefined') return {};
-    try { return JSON.parse(localStorage.getItem('hi-drone-scenes') || '{}'); } catch { return {}; }
-  });
+  const [scenes, setScenes] = useState<Record<string, StoredScene>>({});
   const [activeScene, setActiveScene] = useState<string | null>(null);
   const [events, setEvents] = useState<PerfEvent[]>([]);
   const [pulse, setPulse] = useState<number | null>(null);
@@ -274,6 +271,12 @@ export default function Home() {
   useEffect(() => { rootRef.current = root; }, [root]);
   useEffect(() => { scaleRef.current = scale; }, [scale]);
   useEffect(() => { swingRef.current = swing; }, [swing]);
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      try { setScenes(JSON.parse(localStorage.getItem('hi-drone-scenes') || '{}')); } catch { setScenes({}); }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   const addEvent = useCallback((label: string, kind: EventKind) => {
     const at = captureStartedRef.current ? Date.now() - captureStartedRef.current : Date.now();
