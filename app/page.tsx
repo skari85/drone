@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-type Surface = 'sound' | 'sequence' | 'behaviour' | 'patch';
+type Surface = 'sound' | 'sequence' | 'licks' | 'behaviour' | 'patch';
 type CellMode = 'pulse' | 'gate' | 'random' | 'delay' | 'repeater';
 type EventKind = 'voice' | 'pulse' | 'sequence' | 'gesture' | 'patch' | 'scene';
 type ScaleName = 'minor' | 'dorian' | 'major' | 'pentatonic' | 'phrygian';
@@ -17,6 +17,8 @@ type SequenceTrack = { id: number; name: string; voice: number; colour: string; 
 type SequenceWorld = { bpm: number; root: number; scale: ScaleName; swing: number; pulses: number[]; rotations: number[]; lengths: number[]; seed: number };
 type StoredScene = { macros: Macros; cells: Cell[]; patches: Patch[]; sequence?: { tracks: SequenceTrack[]; bpm: number; root: number; scale: ScaleName; swing: number } };
 type PerfEvent = { at: number; label: string; kind: EventKind };
+type JazzLick = { name: string; idea: string; colour: string; phrase: string };
+type Organism = { phase: number; energy: number; breath: number; coherence: number; signal: string };
 type VoiceNode = { carrier: OscillatorNode; shadow: OscillatorNode; mod: GainNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode };
 type Graph = { context: AudioContext; master: GainNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode; capture: MediaStreamAudioDestinationNode; voices: Map<number, VoiceNode> };
 
@@ -53,6 +55,7 @@ const initialPatches: Patch[] = [
 ];
 const defaultMacros = { tension: 34, movement: 38, density: 45, space: 46, damage: 22 };
 type Macros = typeof defaultMacros;
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 const rootNames = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
 const scales: Record<ScaleName, { label: string; intervals: number[] }> = {
@@ -98,6 +101,14 @@ const buildSequenceTracks = (world: SequenceWorld): SequenceTrack[] => sequenceT
 
 const initialSequenceWorld: SequenceWorld = { bpm: 104, root: 2, scale: 'dorian', swing: 54, pulses: [5, 7, 3, 6], rotations: [0, 2, 1, 3], lengths: [16, 15, 12, 16], seed: 1 };
 const initialSequenceTracks = buildSequenceTracks(initialSequenceWorld);
+
+const jazzLicks: JazzLick[] = [
+  { name: 'Guide-tone glide', idea: 'Singable 3rds and 7ths', colour: 'moss', phrase: 'C · B · A · G  /  F♯ · A · C · B♭  /  B · A · G · F♯' },
+  { name: 'Bebop enclosures', idea: 'Chromatic approaches', colour: 'amber', phrase: 'E · F · F♯ · G  /  C · C♯ · D · F♯  /  F♯ · G · G♯ · A' },
+  { name: 'Arpeggio staircase', idea: 'Compact chord outlines', colour: 'ice', phrase: 'A · C · E · G  /  D · F♯ · A · C  /  G · B · D · F♯' },
+  { name: 'Chromatic lift', idea: 'Half-step connective tissue', colour: 'violet', phrase: 'A · C · C♯ · E  /  E · F · F♯ · A  /  A · A♭ · G · F♯' },
+  { name: 'Altered V, warm landing', idea: 'Outside colour into consonance', colour: 'orange', phrase: 'C · E · G · B  /  F♯ · A♭ · A · C  /  A · B · D · F♯' },
+];
 
 const presets: Preset[] = [
   {
@@ -219,6 +230,8 @@ const sequenceStepMidi = (track: SequenceTrack, step: SequenceStep, root: number
 export default function Home() {
   const [surface, setSurface] = useState<Surface>('sound');
   const [powered, setPowered] = useState(false);
+  const [organismLinked, setOrganismLinked] = useState(true);
+  const [organism, setOrganism] = useState<Organism>({ phase: 0, energy: 48, breath: 0.45, coherence: 0.72, signal: 'listening for a first gesture' });
   const [macros, setMacros] = useState<Macros>(defaultMacros);
   const [activeVoices, setActiveVoices] = useState<number[]>([]);
   const [latchedVoices, setLatchedVoices] = useState<number[]>([]);
@@ -226,6 +239,8 @@ export default function Home() {
   const [cells, setCells] = useState<Cell[]>(initialCells);
   const [behaviourRunning, setBehaviourRunning] = useState(false);
   const [patches, setPatches] = useState<Patch[]>(initialPatches);
+  const [patchSource, setPatchSource] = useState('Breath A');
+  const [patchTarget, setPatchTarget] = useState('Filter');
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [sequenceTracks, setSequenceTracks] = useState<SequenceTrack[]>(initialSequenceTracks);
   const [sequencerPlaying, setSequencerPlaying] = useState(false);
@@ -257,6 +272,10 @@ export default function Home() {
   const scaleRef = useRef(scale);
   const swingRef = useRef(swing);
   const sequenceClockRef = useRef(0);
+  const organismRef = useRef(organism);
+  const organismLinkedRef = useRef(organismLinked);
+  const patchesRef = useRef(patches);
+  const organismClockRef = useRef(0);
   const sequenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const captureStartedRef = useRef(0);
   const captureTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -271,6 +290,9 @@ export default function Home() {
   useEffect(() => { rootRef.current = root; }, [root]);
   useEffect(() => { scaleRef.current = scale; }, [scale]);
   useEffect(() => { swingRef.current = swing; }, [swing]);
+  useEffect(() => { organismRef.current = organism; }, [organism]);
+  useEffect(() => { organismLinkedRef.current = organismLinked; }, [organismLinked]);
+  useEffect(() => { patchesRef.current = patches; }, [patches]);
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       try { setScenes(JSON.parse(localStorage.getItem('hi-drone-scenes') || '{}')); } catch { setScenes({}); }
@@ -345,13 +367,14 @@ export default function Home() {
     filter.frequency.value = 320 + macrosRef.current.movement * 16 + id * 110;
     filter.Q.value = 0.8 + macrosRef.current.tension / 18;
     gain.gain.value = 0;
-    panner.pan.value = (id - 3.5) / 6;
+    panner.pan.value = clamp((id - 3.5) / 6 + organismRef.current.breath * 0.12 - 0.06, -1, 1);
     shadow.connect(mod); mod.connect(carrier.frequency); carrier.connect(filter); filter.connect(gain); gain.connect(panner); panner.connect(graph.master);
     const now = graph.context.currentTime;
-    gain.gain.setTargetAtTime(0.065 + macrosRef.current.density / 1900, now, 0.24);
+    gain.gain.setTargetAtTime((0.065 + macrosRef.current.density / 1900) * (0.82 + organismRef.current.energy / 420), now, 0.24);
     carrier.start(); shadow.start();
     graph.voices.set(id, { carrier, shadow, mod, gain, filter, panner });
     setActiveVoices((previous) => [...new Set([...previous, id])]);
+    setOrganism((previous) => ({ ...previous, energy: clamp(previous.energy + 4, 0, 100), coherence: clamp(previous.coherence + 0.025, 0, 1), signal: `${voice.name} joined the body` }));
     setNotice(`${voice.name} is breathing`);
     addEvent(`${voice.name} / ${origin}`, 'voice');
   }, [addEvent, ensureAudio, latchedVoices, stopVoice]);
@@ -369,10 +392,11 @@ export default function Home() {
     const gain = graph.context.createGain();
     source.buffer = buffer;
     filter.type = id === 0 ? 'lowpass' : id === 3 ? 'bandpass' : 'highpass';
-    filter.frequency.value = id === 0 ? 210 : id === 1 ? 110 : id === 2 ? 1900 : 3400;
+    filter.frequency.value = (id === 0 ? 210 : id === 1 ? 110 : id === 2 ? 1900 : 3400) * (0.86 + organismRef.current.breath * 0.28);
     filter.Q.value = id === 3 ? 7 : 1.4;
-    gain.gain.setValueAtTime(0.001, now); gain.gain.exponentialRampToValueAtTime(0.16 + macrosRef.current.damage / 800, now + 0.008); gain.gain.exponentialRampToValueAtTime(0.001, now + length);
+    gain.gain.setValueAtTime(0.001, now); gain.gain.exponentialRampToValueAtTime((0.16 + macrosRef.current.damage / 800) * (0.82 + organismRef.current.energy / 430), now + 0.008); gain.gain.exponentialRampToValueAtTime(0.001, now + length);
     source.connect(filter); filter.connect(gain); gain.connect(graph.master); source.start(now); source.stop(now + length + 0.03);
+    setOrganism((previous) => ({ ...previous, energy: clamp(previous.energy + 2.5, 0, 100), breath: clamp(previous.breath + 0.04, 0, 1), signal: `${item.name} fed the body` }));
     addEvent(`${item.name} / ${origin}`, 'pulse'); setNotice(`${item.name} struck the field`);
   }, [addEvent, ensureAudio]);
 
@@ -393,10 +417,10 @@ export default function Home() {
     filter.type = track.id === 1 ? 'bandpass' : 'lowpass';
     filter.frequency.value = Math.min(7200, 540 + frequency * (2.1 + macrosRef.current.movement / 45));
     filter.Q.value = 0.9 + macrosRef.current.tension / 28;
-    panner.pan.value = [-0.28, 0.3, -0.08, 0.42][track.id];
+    panner.pan.value = clamp([-0.28, 0.3, -0.08, 0.42][track.id] + organismRef.current.breath * 0.1 - 0.05, -1, 1);
     const stepLength = 60 / bpmRef.current / 4;
     const duration = Math.max(0.08, stepLength * (0.32 + track.gate / 42));
-    const peak = (step.accent ? 0.13 : 0.082) + macrosRef.current.density / 2400;
+    const peak = ((step.accent ? 0.13 : 0.082) + macrosRef.current.density / 2400) * (0.82 + organismRef.current.energy / 460);
     gain.gain.setValueAtTime(0.001, now);
     gain.gain.exponentialRampToValueAtTime(peak, now + 0.012);
     gain.gain.exponentialRampToValueAtTime(Math.max(0.018, peak * 0.45), now + Math.min(0.12, duration * 0.4));
@@ -442,15 +466,20 @@ export default function Home() {
         if (track.muted) return;
         const localIndex = stepIndex % track.length;
         const step = track.steps[localIndex];
-        if (!step?.active || Math.random() * 10000 > track.chance * step.chance) return;
+        const livingChance = track.chance * step?.chance * (0.72 + organismRef.current.coherence * 0.38);
+        if (!step?.active || Math.random() * 10000 > livingChance) return;
+        const organicLift = organismRef.current.breath > 0.72 && track.id % 2 === 1 ? 1 : 0;
         const cycleMotion = cycleIndex === 1 && track.id % 2 === 1 ? 1 : cycleIndex === 2 ? (track.id + 1) % 3 : 0;
-        const degree = Math.max(0, step.degree + cycleMotion);
+        const degree = Math.max(0, step.degree + cycleMotion + organicLift);
         const scaleOctave = Math.floor(degree / scaleIntervals.length);
         const interval = scaleIntervals[degree % scaleIntervals.length];
         const midi = 36 + rootRef.current + interval + 12 * (track.octave + step.octave + scaleOctave);
         triggerSequenceNote(track, midi, step);
       });
-      if (stepIndex === 0) setNotice(`phrase cycle ${cycleIndex + 1}/4 · ${rootNames[rootRef.current]} ${scales[scaleRef.current].label}`);
+      if (stepIndex === 0) {
+        setNotice(`phrase cycle ${cycleIndex + 1}/4 · ${rootNames[rootRef.current]} ${scales[scaleRef.current].label}`);
+        setOrganism((previous) => ({ ...previous, coherence: clamp(previous.coherence + 0.04, 0, 1), signal: `cycle ${cycleIndex + 1} returned to the body` }));
+      }
       sequenceClockRef.current += 1;
       const baseStep = 60000 / bpmRef.current / 4;
       const swingDepth = Math.max(0, (swingRef.current - 50) / 50) * 0.42;
@@ -465,22 +494,66 @@ export default function Home() {
   }, [powered, sequencerPlaying, triggerSequenceNote]);
 
   useEffect(() => {
+    if (!powered || !organismLinked) return;
+    organismClockRef.current = 0;
+    const interval = window.setInterval(() => {
+      const tick = organismClockRef.current;
+      const patchPressure = patchesRef.current.reduce((sum, patch) => sum + Math.abs(patch.amount), 0) / 300;
+      const voiceCount = graphRef.current?.voices.size ?? 0;
+      const breath = 0.5 + Math.sin(tick * 0.17 + patchPressure) * 0.32;
+      const coherence = clamp(0.58 + Math.sin(tick * 0.07) * 0.14 + (sequencerPlaying ? 0.12 : 0) - (patchPressure * 0.02), 0.12, 0.96);
+      const targetEnergy = clamp(28 + macrosRef.current.density * 0.42 + voiceCount * 4 + (behaviourRunning ? 9 : 0) + breath * 8, 0, 100);
+      setOrganism((previous) => ({
+        phase: tick,
+        energy: previous.energy * 0.84 + targetEnergy * 0.16,
+        breath,
+        coherence,
+        signal: sequencerPlaying ? 'sequence and voices exchanging breath' : behaviourRunning ? 'cells are feeding the field' : voiceCount ? `${voiceCount} voices sharing the body` : 'listening for a first gesture',
+      }));
+      const graph = graphRef.current;
+      if (graph) {
+        const now = graph.context.currentTime;
+        graph.voices.forEach((node, id) => {
+          const voice = voices[id];
+          const movement = macrosRef.current.movement * 14 + Math.sin(tick * 0.11 + id) * (8 + patchPressure * 3);
+          node.filter.frequency.setTargetAtTime(Math.max(90, voice.base * 3.4 + movement), now, 0.16);
+          node.filter.Q.setTargetAtTime(0.8 + macrosRef.current.tension / 18 + coherence * 1.8, now, 0.2);
+          node.mod.gain.setTargetAtTime(voice.base * (0.015 + macrosRef.current.damage / 1800) * (0.86 + breath * 0.22), now, 0.18);
+          node.gain.gain.setTargetAtTime((0.065 + macrosRef.current.density / 1900) * (0.78 + targetEnergy / 450), now, 0.24);
+          node.panner.pan.setTargetAtTime(clamp((id - 3.5) / 6 + (breath - 0.5) * 0.22, -1, 1), now, 0.3);
+        });
+      }
+      organismClockRef.current += 1;
+    }, 160);
+    return () => window.clearInterval(interval);
+  }, [behaviourRunning, organismLinked, powered, sequencerPlaying]);
+
+  useEffect(() => {
     if (!powered || !behaviourRunning) return;
     clockRef.current = 0;
     const interval = setInterval(() => {
       clockRef.current += 80;
       cellsRef.current.forEach((cell) => {
-        const intervalMs = Math.max(220, cell.interval * (1 - (macrosRef.current.movement / 100) * 0.28));
+        const intervalMs = Math.max(220, cell.interval * (1 - (macrosRef.current.movement / 100) * 0.28) * (0.88 + organismRef.current.breath * 0.24));
         if (clockRef.current % Math.round(intervalMs / 80) !== 0) return;
-        const chance = Math.min(0.98, (cell.probability / 100) * (0.65 + (macrosRef.current.density / 100) * 0.55));
+        const chance = Math.min(0.98, (cell.probability / 100) * (0.65 + (macrosRef.current.density / 100) * 0.55) * (0.78 + organismRef.current.energy / 280));
         if (Math.random() > chance) return;
         setPulse(cell.id); window.setTimeout(() => setPulse((current) => current === cell.id ? null : current), 240);
+        setOrganism((previous) => ({ ...previous, energy: clamp(previous.energy + 1.5, 0, 100), coherence: clamp(previous.coherence - 0.01, 0, 1), signal: `${cell.name} passed a signal through the body` }));
         if (cell.kind === 'voice') { const target = cell.mode === 'random' ? Math.floor(Math.random() * voices.length) : cell.target; activateVoice(target, 'cell'); if (cell.mode === 'gate') window.setTimeout(() => stopVoice(target), 220 + macrosRef.current.space * 8); }
         else { const target = cell.mode === 'random' ? Math.floor(Math.random() * percussion.length) : cell.target; triggerPercussion(target, 'cell'); }
       });
     }, 80);
     return () => clearInterval(interval);
   }, [activateVoice, behaviourRunning, powered, stopVoice, triggerPercussion]);
+
+  useEffect(() => {
+    if (!powered || !heldPercs.length) return;
+    const interval = window.setInterval(() => {
+      heldPercs.forEach((id) => triggerPercussion(id, 'held drone'));
+    }, Math.max(360, 900 - macrosRef.current.space * 4));
+    return () => window.clearInterval(interval);
+  }, [heldPercs, powered, triggerPercussion]);
 
   useEffect(() => {
     if (!graphRef.current) return;
@@ -499,6 +572,17 @@ export default function Home() {
     setActiveScene(slot); setActivePreset(null); addEvent(`scene ${slot} recalled`, 'scene'); setNotice(`scene ${slot} is breathing`);
   }, [addEvent, saveScene, scenes]);
 
+  const connectPatch = useCallback(() => {
+    setPatches((previous) => {
+      if (previous.some((patch) => patch.source === patchSource && patch.target === patchTarget)) return previous;
+      const nextId = previous.reduce((highest, patch) => Math.max(highest, patch.id), -1) + 1;
+      return [...previous, { id: nextId, source: patchSource, target: patchTarget, amount: Math.round(24 + organismRef.current.breath * 32) }];
+    });
+    setOrganism((previous) => ({ ...previous, coherence: clamp(previous.coherence + 0.08, 0, 1), signal: `${patchSource} began feeding ${patchTarget}` }));
+    addEvent(`patch ${patchSource} → ${patchTarget}`, 'patch');
+    setNotice(`${patchSource} now feeds ${patchTarget}`);
+  }, [addEvent, patchSource, patchTarget]);
+
   const applyPreset = useCallback((preset: Preset) => {
     const world = presetSequenceWorlds[preset.name];
     setMacros(preset.macros);
@@ -508,6 +592,16 @@ export default function Home() {
     setActiveScene(null);
     addEvent(`preset ${preset.name}`, 'scene');
     setNotice(`${preset.name}: ${preset.detail}`);
+  }, [addEvent]);
+
+  const foldJazzLickIntoDrone = useCallback((lick: JazzLick) => {
+    const jazzWorld: SequenceWorld = { bpm: 112, root: 7, scale: 'major', swing: 54, pulses: [5, 7, 4, 5], rotations: [0, 1, 2, 3], lengths: [16, 16, 12, 16], seed: 5 };
+    setMacros({ tension: 42, movement: 16, density: 48, space: 68, damage: 12 });
+    setSequenceTracks(buildSequenceTracks(jazzWorld));
+    setBpm(jazzWorld.bpm); setRoot(jazzWorld.root); setScale(jazzWorld.scale); setSwing(jazzWorld.swing);
+    setActivePreset(null); setActiveScene(null); setSurface('sequence');
+    setNotice(`${lick.name} folded into G major — let the drone hold the landing`);
+    addEvent(`jazz lick / ${lick.name}`, 'sequence');
   }, [addEvent]);
 
   const startCapture = useCallback(async () => {
@@ -566,7 +660,7 @@ export default function Home() {
   };
   const toggleBehaviourNetwork = useCallback(async () => {
     if (behaviourRunning) { setBehaviourRunning(false); setNotice('behaviour cells sleeping — sequence remains clear'); return; }
-    await ensureAudio(); setPowered(true); setBehaviourRunning(true); setNotice('behaviour cells joined the sequence');
+    await ensureAudio(); setPowered(true); setBehaviourRunning(true); setSequencerPlaying(true); sequenceClockRef.current = 0; setNotice('behaviour cells joined the sequence');
   }, [behaviourRunning, ensureAudio]);
 
   useEffect(() => {
@@ -597,10 +691,10 @@ export default function Home() {
   const selectedMidi = 36 + root + selectedScale.intervals[selectedDegree % selectedScale.intervals.length] + 12 * (selectedTrackData.octave + selectedStepData.octave + Math.floor(selectedDegree / selectedScale.intervals.length));
 
   return <main className="instrument-shell">
-    <header className="topbar"><div className="brand-lockup"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><div><h1>HI DRONE</h1><p>organismic composition station</p></div></div><div className="top-actions"><div className={`engine-state ${powered ? 'awake' : ''}`}><span aria-hidden="true" />{powered ? 'engine awake' : 'engine asleep'}</div><button className={`power-button ${powered ? 'is-on' : ''}`} type="button" onClick={togglePower}><span aria-hidden="true">◉</span> POWER</button></div></header>
+    <header className="topbar"><div className="brand-lockup"><div className="brand-mark" aria-hidden="true"><span /><span /><span /></div><div><h1>HI DRONE</h1><p>synth soul / organismic composition station</p></div></div><div className="top-actions"><div className={`organism-state ${organismLinked ? 'is-linked' : ''}`} title={organism.signal}><span aria-hidden="true" />{organismLinked ? 'synth soul' : 'manual mode'}<small>{Math.round(organism.energy * organism.coherence)}%</small></div><button className={`organism-toggle ${organismLinked ? 'is-on' : ''}`} type="button" onClick={() => { setOrganismLinked((previous) => !previous); setNotice(organismLinked ? 'organism link loosened — manual currents only' : 'organism link restored — everything can feed everything'); }}><span aria-hidden="true">⌁</span> LINK</button><div className={`engine-state ${powered ? 'awake' : ''}`}><span aria-hidden="true" />{powered ? 'engine awake' : 'engine asleep'}</div><button className={`power-button ${powered ? 'is-on' : ''}`} type="button" onClick={togglePower}><span aria-hidden="true">◉</span> POWER</button></div></header>
     <section className="global-rack" aria-label="Global controls">{(Object.keys(macros) as Array<keyof Macros>).map((key) => <label className="macro-control" key={key}><span><b>{key}</b><output>{macros[key]}</output></span><input type="range" min="0" max="100" value={macros[key]} onChange={(event) => updateMacro(key, Number(event.target.value))} /></label>)}<div className="scene-bank" aria-label="Scenes"><span>SCENES</span><div>{slots.map((slot) => <button key={slot} type="button" className={activeScene === slot ? 'is-active' : ''} title={scenes[slot] ? `Recall scene ${slot}` : `Store scene ${slot}`} onClick={() => loadScene(slot)} onContextMenu={(event) => { event.preventDefault(); saveScene(slot); }}>{slot}</button>)}</div></div></section>
-    <section className="preset-rack" aria-label="Starting presets"><div className="preset-intro"><span>STARTING WEATHER</span><strong>Choose a pulse, then disturb it.</strong></div><div className="preset-list">{presets.map((preset) => <button key={preset.name} type="button" className={activePreset === preset.name ? 'is-active' : ''} onClick={() => applyPreset(preset)}><span>{preset.name}</span><small><b>{preset.genre}</b> · {preset.detail}</small></button>)}</div></section>
-    <nav className="mode-tabs" aria-label="Instrument surfaces">{(['sound', 'sequence', 'behaviour', 'patch'] as Surface[]).map((item, index) => <button key={item} className={surface === item ? 'is-active' : ''} type="button" onClick={() => setSurface(item)}><span>0{index + 1}</span>{item}</button>)}</nav>
+    <section className="preset-rack" aria-label="Starting presets"><div className="preset-intro"><span>STARTING WEATHER</span><strong>Choose a pulse; let the organism answer.</strong></div><div className="preset-list">{presets.map((preset) => <button key={preset.name} type="button" className={activePreset === preset.name ? 'is-active' : ''} onClick={() => applyPreset(preset)}><span>{preset.name}</span><small><b>{preset.genre}</b> · {preset.detail}</small></button>)}</div></section>
+    <nav className="mode-tabs" aria-label="Instrument surfaces">{(['sound', 'sequence', 'licks', 'behaviour', 'patch'] as Surface[]).map((item, index) => <button key={item} className={surface === item ? 'is-active' : ''} type="button" onClick={() => setSurface(item)}><span>0{index + 1}</span>{item}</button>)}</nav>
     <section className="working-surface">
       {surface === 'sequence' && <div className="sequence-surface">
         <div className="surface-heading"><div><span>MELODIC CURRENT</span><h2>Four paths through one scale</h2></div><p>Build a pulse, choose its notes, then let four cycles develop the phrase.</p></div>
@@ -633,10 +727,16 @@ export default function Home() {
           <div className="step-inspector"><div className="editor-heading"><span>STEP {String(selectedSequenceStep + 1).padStart(2, '0')}</span><strong>{midiToLabel(selectedMidi)}</strong><button className={selectedStepData.active ? 'is-on' : ''} type="button" onClick={() => updateSelectedStep({ active: !selectedStepData.active })}>{selectedStepData.active ? 'ACTIVE' : 'OFF'}</button></div><div className="pitch-steppers"><button type="button" aria-label="Lower note" onClick={() => updateSelectedStep({ degree: Math.max(0, selectedStepData.degree - 1) })}>−</button><div><span>SCALE DEGREE</span><strong>{selectedStepData.degree + 1}</strong><small>{rootNames[root]} {selectedScale.label}</small></div><button type="button" aria-label="Raise note" onClick={() => updateSelectedStep({ degree: Math.min(14, selectedStepData.degree + 1) })}>+</button></div><div className="step-detail-controls"><label><span>STEP OCTAVE <output>{selectedStepData.octave > 0 ? `+${selectedStepData.octave}` : selectedStepData.octave}</output></span><input type="range" min="-1" max="1" value={selectedStepData.octave} onChange={(event) => updateSelectedStep({ octave: Number(event.target.value) })} /></label><label><span>STEP CHANCE <output>{selectedStepData.chance}%</output></span><input type="range" min="0" max="100" value={selectedStepData.chance} onChange={(event) => updateSelectedStep({ chance: Number(event.target.value) })} /></label><button className={selectedStepData.accent ? 'is-on' : ''} type="button" onClick={() => updateSelectedStep({ accent: !selectedStepData.accent })}>{selectedStepData.accent ? 'ACCENT ON' : 'ADD ACCENT'}</button></div></div>
         </section>
       </div>}
+      {surface === 'licks' && <div className="lick-surface">
+        <div className="surface-heading"><div><span>JAZZ WEATHER</span><h2>Five ii–V–I licks in G major</h2></div><p>Original educational lines for Am7 · D7 · Gmaj7. Fold one into the drone.</p></div>
+        <div className="lick-hero"><div><span>HARMONIC LOOP</span><strong>Am7&nbsp;&nbsp;→&nbsp;&nbsp;D7&nbsp;&nbsp;→&nbsp;&nbsp;Gmaj7</strong><small>112 BPM · 4/4 · eighth-note vocabulary</small></div><button type="button" onClick={() => foldJazzLickIntoDrone(jazzLicks[0])}>FOLD GUIDE TONES INTO DRONE</button></div>
+        <div className="lick-grid">{jazzLicks.map((lick, index) => <article className={`lick-card lick-${lick.colour}`} key={lick.name}><div className="lick-card-top"><span>0{index + 1}</span><b>{lick.idea}</b></div><h3>{lick.name}</h3><p>{lick.phrase}</p><div className="lick-card-bottom"><small>Am7 / D7 / Gmaj7</small><button type="button" onClick={() => foldJazzLickIntoDrone(lick)}>FOLD INTO DRONE <span aria-hidden="true">↗</span></button></div></article>)}</div>
+        <div className="lick-note"><span>LISTENING NOTE</span><p>The engraved notation and TAB are playing above. In the drone, use the sequencer as the sustained harmonic bed; each card sets the engine to G major and keeps the ii–V–I colour close at hand.</p></div>
+      </div>}
       {surface === 'behaviour' && <div className="behaviour-switch"><div><span>CELL AUTONOMY</span><strong>{behaviourRunning ? 'Cells are moving beside the melody' : 'Cells are sleeping'}</strong><small>Keep this off for a clear sequence; wake it when you want organic interference.</small></div><button className={behaviourRunning ? 'is-on' : ''} type="button" onClick={toggleBehaviourNetwork}>{behaviourRunning ? 'LET CELLS SLEEP' : 'WAKE CELLS'}</button></div>}
-      {surface === 'sound' && <div className="sound-surface"><div className="surface-heading"><div><span>DRONE FIELD</span><h2>Eight interacting voices</h2></div><p>Tap for a phrase. Latch to let a voice live.</p></div><div className="voice-grid">{voices.map((voice) => <article className={`voice-module tone-${voice.tone} ${activeVoices.includes(voice.id) ? 'is-active' : ''}`} key={voice.id}><div className="module-index">0{voice.id + 1}</div><button className="voice-pad" type="button" onClick={() => activateVoice(voice.id)}><span className="voice-core" aria-hidden="true" /><strong>{voice.name}</strong><small>{Math.round(voice.base * (0.94 + macros.tension / 100 * 0.12))} Hz · {voice.role}</small></button><label><span>TUNE <output>{Math.round(24 + (voice.base / 262) * 36)}</output></span><input aria-label={`${voice.name} tune`} type="range" min="24" max="76" defaultValue={Math.round(24 + (voice.base / 262) * 36)} /></label><button className={`latch-button ${latchedVoices.includes(voice.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleLatch(voice.id)}><span aria-hidden="true" />{latchedVoices.includes(voice.id) ? 'LATCHED' : 'LATCH'}</button></article>)}</div><div className="surface-heading percussion-heading"><div><span>PULSE FIELD</span><h2>Four percussive bodies</h2></div><p>Every impact can be held open as a drone.</p></div><div className="percussion-grid">{percussion.map((item) => <article className={`percussion-module ${item.tone}`} key={item.id}><button className="percussion-pad" type="button" onClick={() => triggerPercussion(item.id)}><span aria-hidden="true" /><strong>{item.name}</strong><small>{item.role}</small></button><label><span>DECAY <output>{48 + item.id * 10}</output></span><input aria-label={`${item.name} decay`} type="range" min="5" max="100" defaultValue={48 + item.id * 10} /></label><button className={`hold-button ${heldPercs.includes(item.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleHold(item.id)}>{heldPercs.includes(item.id) ? 'RELEASE DRONE' : 'HOLD AS DRONE'}</button></article>)}</div></div>}
+      {surface === 'sound' && <div className="sound-surface"><div className="surface-heading"><div><span>DRONE FIELD</span><h2>Eight voices, one nervous system</h2></div><p>Touch a body. Latch the ones that want to stay. The rest will keep listening.</p></div><div className="voice-grid">{voices.map((voice) => <article className={`voice-module tone-${voice.tone} ${activeVoices.includes(voice.id) ? 'is-active' : ''}`} key={voice.id}><div className="module-index">0{voice.id + 1}</div><button className="voice-pad" type="button" onClick={() => activateVoice(voice.id)}><span className="voice-core" aria-hidden="true" /><strong>{voice.name}</strong><small>{Math.round(voice.base * (0.94 + macros.tension / 100 * 0.12))} Hz · {voice.role}</small></button><label><span>TUNE <output>{Math.round(24 + (voice.base / 262) * 36)}</output></span><input aria-label={`${voice.name} tune`} type="range" min="24" max="76" defaultValue={Math.round(24 + (voice.base / 262) * 36)} /></label><button className={`latch-button ${latchedVoices.includes(voice.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleLatch(voice.id)}><span aria-hidden="true" />{latchedVoices.includes(voice.id) ? 'LATCHED' : 'LATCH'}</button></article>)}</div><div className="surface-heading percussion-heading"><div><span>PULSE FIELD</span><h2>Four percussive bodies</h2></div><p>Every impact changes the shared breath. Hold one open and it becomes a heartbeat.</p></div><div className="percussion-grid">{percussion.map((item) => <article className={`percussion-module ${item.tone}`} key={item.id}><button className="percussion-pad" type="button" onClick={() => triggerPercussion(item.id)}><span aria-hidden="true" /><strong>{item.name}</strong><small>{item.role}</small></button><label><span>DECAY <output>{48 + item.id * 10}</output></span><input aria-label={`${item.name} decay`} type="range" min="5" max="100" defaultValue={48 + item.id * 10} /></label><button className={`hold-button ${heldPercs.includes(item.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleHold(item.id)}>{heldPercs.includes(item.id) ? 'RELEASE DRONE' : 'HOLD AS DRONE'}</button></article>)}</div></div>}
       {surface === 'behaviour' && <div className="behaviour-surface"><div className="surface-heading"><div><span>BEHAVIOUR NETWORK</span><h2>Eight cells with unfinished plans</h2></div><p>Cells drift, wake each other and forget what they meant to do.</p></div><div className="network-field"><div className="network-lines" aria-hidden="true"><i /><i /><i /><i /><i /></div>{cells.map((cell) => <article className={`cell cell-${cell.colour} ${pulse === cell.id ? 'is-pulsing' : ''}`} key={cell.id}><div className="cell-orbit" /><div className="cell-head"><span>0{cell.id + 1}</span><strong>{cell.name}</strong><b>{cell.mode}</b></div><div className="cell-body"><div className="cell-target">{cell.kind === 'voice' ? voices[cell.target]?.name : percussion[cell.target]?.name}</div><div className="cell-stats"><span>{cell.interval}ms</span><span>{cell.probability}% chance</span></div></div><label><span>PROBABILITY <output>{cell.probability}</output></span><input type="range" min="0" max="100" value={cell.probability} onChange={(event) => setCells((previous) => previous.map((entry) => entry.id === cell.id ? { ...entry, probability: Number(event.target.value) } : entry))} /></label><select aria-label={`${cell.name} mode`} value={cell.mode} onChange={(event) => setCells((previous) => previous.map((entry) => entry.id === cell.id ? { ...entry, mode: event.target.value as CellMode } : entry))}>{modes.map((mode) => <option key={mode}>{mode}</option>)}</select></article>)}</div></div>}
-      {surface === 'patch' && <div className="patch-surface"><div className="surface-heading"><div><span>PATCH WEATHER</span><h2>Three connections are awake</h2></div><p>Drag the atmosphere through the instrument. Nothing is permanent.</p></div><div className="patch-grid"><div className="patch-column"><span className="column-label">SOURCES</span>{['Breath A', 'Breath B', 'Uncertainty', 'Feedback weather'].map((source) => <button className="patch-node source" key={source} type="button"><i />{source}<small>signal</small></button>)}</div><div className="patch-visual" aria-hidden="true"><div className="signal signal-one" /><div className="signal signal-two" /><div className="signal signal-three" /></div><div className="patch-column"><span className="column-label">TARGETS</span>{['Voice pairs', 'Filter', 'Delay', 'Drive'].map((target) => <button className="patch-node target" key={target} type="button"><i />{target}<small>destination</small></button>)}</div></div><div className="cable-list">{patches.map((patch) => <article className="cable" key={patch.id}><span className="cable-dot" /><strong>{patch.source}</strong><span className="cable-arrow">→</span><strong>{patch.target}</strong><label><span>AMOUNT <output>{patch.amount}</output></span><input type="range" min="-100" max="100" value={patch.amount} onChange={(event) => setPatches((previous) => previous.map((entry) => entry.id === patch.id ? { ...entry, amount: Number(event.target.value) } : entry))} /></label><button type="button" onClick={() => setPatches((previous) => previous.filter((entry) => entry.id !== patch.id))}>REMOVE</button></article>)}</div></div>}
+      {surface === 'patch' && <div className="patch-surface"><div className="surface-heading"><div><span>PATCH WEATHER</span><h2>Everything can feed everything</h2></div><p>Choose a source and destination, then let the organism metabolise the connection.</p></div><div className="patch-grid"><div className="patch-column"><span className="column-label">SOURCES</span>{['Breath A', 'Breath B', 'Uncertainty', 'Feedback weather'].map((source) => <button className={`patch-node source ${patchSource === source ? 'is-selected' : ''}`} key={source} type="button" onClick={() => { setPatchSource(source); setNotice(`${source} is ready to feed ${patchTarget}`); }}><i />{source}<small>signal</small></button>)}</div><div className="patch-visual"><div className="signal signal-one" /><div className="signal signal-two" /><div className="signal signal-three" /><button className="patch-connect" type="button" onClick={connectPatch}>CONNECT<div>{patchSource} → {patchTarget}</div></button></div><div className="patch-column"><span className="column-label">TARGETS</span>{['Voice pairs', 'Filter', 'Delay', 'Drive'].map((target) => <button className={`patch-node target ${patchTarget === target ? 'is-selected' : ''}`} key={target} type="button" onClick={() => { setPatchTarget(target); setNotice(`${patchSource} is ready to feed ${target}`); }}><i />{target}<small>destination</small></button>)}</div></div><div className="cable-list">{patches.map((patch) => <article className="cable" key={patch.id}><span className="cable-dot" /><strong>{patch.source}</strong><span className="cable-arrow">→</span><strong>{patch.target}</strong><label><span>AMOUNT <output>{patch.amount}</output></span><input type="range" min="-100" max="100" value={patch.amount} onChange={(event) => setPatches((previous) => previous.map((entry) => entry.id === patch.id ? { ...entry, amount: Number(event.target.value) } : entry))} /></label><button type="button" onClick={() => setPatches((previous) => previous.filter((entry) => entry.id !== patch.id))}>REMOVE</button></article>)}</div></div>}
     </section>
     <section className="telemetry-rack"><div className="telemetry-label"><span>FIELD TELEMETRY</span><strong>{notice}</strong></div><div className="meter" aria-label={`audio activity ${meter}%`}><span style={{ width: `${meter}%` }} /></div><div className="shortcut-hint">P sequence · SPACE power · 1–8 voices · Q W E T surfaces · R capture</div></section>
     <section className="timeline-rack"><div className="timeline-heading"><span>EVENT WEATHER</span><strong>{timeline.length ? `${timeline.length} gestures in memory` : 'waiting for a first disturbance'}</strong></div><div className="timeline-track">{timeline.map((event, index) => <div className={`timeline-event ${event.kind}`} key={`${event.at}-${index}`} style={{ left: `${Math.min(96, (index / Math.max(1, timeline.length - 1)) * 92 + 2)}%` }} title={event.label}><i /><span>{event.label}</span></div>)}</div></section>
