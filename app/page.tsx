@@ -6,6 +6,8 @@ type Surface = 'sound' | 'sequence' | 'licks' | 'behaviour' | 'patch';
 type CellMode = 'pulse' | 'gate' | 'random' | 'delay' | 'repeater';
 type EventKind = 'voice' | 'pulse' | 'sequence' | 'gesture' | 'patch' | 'scene';
 type DroneScaleName = 'minor' | 'dorian' | 'phrygian' | 'pentaMinor' | 'pentaMajor' | 'wholeTone' | 'harmonicMinor' | 'lydian';
+type ModulationShape = 'sine' | 'random';
+type NoiseColor = 'brown' | 'pink' | 'white';
 type ScaleName = 'minor' | 'dorian' | 'major' | 'pentatonic' | 'phrygian';
 
 type Voice = { id: number; name: string; base: number; tone: string; role: string };
@@ -16,14 +18,14 @@ type Preset = { name: string; genre: string; detail: string; macros: Macros; cel
 type SequenceStep = { active: boolean; degree: number; octave: number; chance: number; accent: boolean };
 type SequenceTrack = { id: number; name: string; voice: number; colour: string; length: number; pulses: number; rotate: number; octave: number; range: number; chance: number; gate: number; muted: boolean; steps: SequenceStep[] };
 type SequenceWorld = { bpm: number; root: number; scale: ScaleName; swing: number; pulses: number[]; rotations: number[]; lengths: number[]; seed: number };
-type StoredScene = { macros: Macros; cells: Cell[]; patches: Patch[]; sequence?: { tracks: SequenceTrack[]; bpm: number; root: number; scale: ScaleName; swing: number } };
+type StoredScene = { macros: Macros; cells: Cell[]; patches: Patch[]; drone?: DroneSettings; sequence?: { tracks: SequenceTrack[]; bpm: number; root: number; scale: ScaleName; swing: number } };
 type PerfEvent = { at: number; label: string; kind: EventKind };
 type JazzLick = { name: string; idea: string; colour: string; phrase: string };
 type Organism = { phase: number; energy: number; breath: number; coherence: number; signal: string };
 type VoiceNode = { carrier: OscillatorNode; shadow: OscillatorNode; mod: GainNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode };
-type DroneVoiceNode = { noteName: string; oscillators: Array<{ osc: OscillatorNode; gain: GainNode }>; voiceGain: GainNode; filter: BiquadFilterNode; filterLfo: OscillatorNode; filterLfoGain: GainNode; pitchLfo: OscillatorNode; pitchLfoGain: GainNode; volLfo: OscillatorNode; volLfoGain: GainNode };
-type DroneSettings = { basePitch: number; detuneCents: number; oscCount: number; waveform: OscillatorType; filterRate: number; filterDepth: number; pitchDrift: number; volLfoDepth: number; reverbAmount: number; delayAmount: number; delayTime: number; masterVolume: number; scale: DroneScaleName; genSpeed: number; maxVoices: number };
-type Graph = { context: AudioContext; master: GainNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode; capture: MediaStreamAudioDestinationNode; voices: Map<number, VoiceNode>; droneMaster: GainNode; droneDry: GainNode; droneReverb: ConvolverNode; droneReverbWet: GainNode; droneDelay: DelayNode; droneDelayFeedback: GainNode; droneDelayWet: GainNode; droneVoices: Map<number, DroneVoiceNode> };
+type DroneVoiceNode = { noteName: string; oscillators: Array<{ osc: OscillatorNode; gain: GainNode }>; voiceGain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode; filterLfo: OscillatorNode; filterLfoGain: GainNode; pitchLfo: OscillatorNode; pitchLfoGain: GainNode; volLfo: OscillatorNode; volLfoGain: GainNode; panLfo: OscillatorNode; panLfoGain: GainNode; randomInterval: number | null };
+type DroneSettings = { basePitch: number; detuneCents: number; oscCount: number; waveform: OscillatorType; modulationShape: ModulationShape; filterRate: number; filterDepth: number; pitchDrift: number; volLfoDepth: number; panDepth: number; noiseColor: NoiseColor; noiseAmount: number; reverbAmount: number; delayAmount: number; delayTime: number; delayFeedback: number; chorusAmount: number; driveAmount: number; masterVolume: number; scale: DroneScaleName; genSpeed: number; maxVoices: number };
+type Graph = { context: AudioContext; master: GainNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode; capture: MediaStreamAudioDestinationNode; voices: Map<number, VoiceNode>; droneMaster: GainNode; droneBus: GainNode; droneDrive: WaveShaperNode; droneChorusDry: GainNode; droneChorusDelay: DelayNode; droneChorusWet: GainNode; droneChorusLfo: OscillatorNode; droneChorusDepth: GainNode; droneDry: GainNode; droneReverb: ConvolverNode; droneReverbWet: GainNode; droneDelay: DelayNode; droneDelayFeedback: GainNode; droneDelayWet: GainNode; droneNoise: AudioBufferSourceNode; droneNoiseFilter: BiquadFilterNode; droneNoiseGain: GainNode; droneVoices: Map<number, DroneVoiceNode> };
 
 const voices: Voice[] = [
   { id: 0, name: 'Moss', base: 65, tone: 'moss', role: 'low bloom' },
@@ -59,6 +61,15 @@ const initialPatches: Patch[] = [
 const defaultMacros = { tension: 34, movement: 38, density: 45, space: 46, damage: 22 };
 type Macros = typeof defaultMacros;
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const createDriveCurve = (amount: number) => {
+  const curve = new Float32Array(2048);
+  const drive = 1 + amount * 36;
+  for (let index = 0; index < curve.length; index += 1) {
+    const x = (index * 2) / (curve.length - 1) - 1;
+    curve[index] = amount <= 0.001 ? x : Math.tanh(x * drive) / Math.tanh(drive);
+  }
+  return curve;
+};
 const createDroneReverb = (context: AudioContext, duration = 3.5) => {
   const convolver = context.createConvolver();
   const length = Math.floor(context.sampleRate * duration);
@@ -74,6 +85,12 @@ const createDroneReverb = (context: AudioContext, duration = 3.5) => {
   }
   convolver.buffer = impulse;
   return convolver;
+};
+const createNoiseBuffer = (context: AudioContext, duration = 2) => {
+  const buffer = context.createBuffer(1, Math.floor(context.sampleRate * duration), context.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let index = 0; index < data.length; index += 1) data[index] = Math.random() * 2 - 1;
+  return buffer;
 };
 
 const rootNames = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
@@ -96,8 +113,9 @@ const droneScales: Record<DroneScaleName, { label: string; intervals: number[] }
 };
 const dronePrimes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53];
 const defaultDroneSettings: DroneSettings = {
-  basePitch: 55, detuneCents: 7, oscCount: 5, waveform: 'sine', filterRate: 0.05, filterDepth: 0.6,
-  pitchDrift: 0.15, volLfoDepth: 0.3, reverbAmount: 0.7, delayAmount: 0.4, delayTime: 0.8,
+  basePitch: 55, detuneCents: 7, oscCount: 5, waveform: 'sine', modulationShape: 'sine', filterRate: 0.05, filterDepth: 0.6,
+  pitchDrift: 0.15, volLfoDepth: 0.3, panDepth: 0.35, noiseColor: 'brown', noiseAmount: 0.12,
+  reverbAmount: 0.7, delayAmount: 0.4, delayTime: 0.8, delayFeedback: 0.45, chorusAmount: 0.18, driveAmount: 0.04,
   masterVolume: 0.5, scale: 'minor', genSpeed: 8, maxVoices: 6,
 };
 const sequenceTrackTemplates = [
@@ -274,7 +292,7 @@ function MacroKnob({ label, value, onChange }: { label: string; value: number; o
 export default function Home() {
   const [surface, setSurface] = useState<Surface>('sound');
   const [setupOpen, setSetupOpen] = useState(false);
-  const [openModules, setOpenModules] = useState<Record<Surface, boolean>>({ sound: false, sequence: true, licks: false, behaviour: false, patch: false });
+  const [openModules, setOpenModules] = useState<Record<Surface, boolean>>({ sound: true, sequence: false, licks: false, behaviour: false, patch: false });
   const [powered, setPowered] = useState(false);
   const [organismLinked, setOrganismLinked] = useState(true);
   const [organism, setOrganism] = useState<Organism>({ phase: 0, energy: 48, breath: 0.45, coherence: 0.72, signal: 'listening for a first gesture' });
@@ -334,7 +352,7 @@ export default function Home() {
   const droneSettingsRef = useRef(droneSettings);
   const droneRunningRef = useRef(droneRunning);
   const dronePausedRef = useRef(dronePaused);
-  const droneGenerationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const droneGenerationTimerRef = useRef<number | null>(null);
   const droneSeedRef = useRef(Math.floor(Math.random() * 100000));
   const droneVoiceIdRef = useRef(0);
   const droneCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -378,12 +396,22 @@ export default function Home() {
     const analyser = context.createAnalyser();
     const capture = context.createMediaStreamDestination();
     const droneMaster = context.createGain();
+    const droneBus = context.createGain();
+    const droneDrive = context.createWaveShaper();
+    const droneChorusDry = context.createGain();
+    const droneChorusDelay = context.createDelay(0.05);
+    const droneChorusWet = context.createGain();
+    const droneChorusLfo = context.createOscillator();
+    const droneChorusDepth = context.createGain();
     const droneDry = context.createGain();
     const droneReverb = createDroneReverb(context);
     const droneReverbWet = context.createGain();
     const droneDelay = context.createDelay(5);
     const droneDelayFeedback = context.createGain();
     const droneDelayWet = context.createGain();
+    const droneNoise = context.createBufferSource();
+    const droneNoiseFilter = context.createBiquadFilter();
+    const droneNoiseGain = context.createGain();
     master.gain.value = 0.48;
     compressor.threshold.value = -16;
     compressor.knee.value = 22;
@@ -394,24 +422,51 @@ export default function Home() {
     analyser.smoothingTimeConstant = 0.85;
     droneDry.gain.value = 1 - defaultDroneSettings.reverbAmount * 0.5;
     droneMaster.gain.value = defaultDroneSettings.masterVolume;
+    droneDrive.curve = createDriveCurve(defaultDroneSettings.driveAmount);
+    droneDrive.oversample = '2x';
+    droneChorusDry.gain.value = 1 - defaultDroneSettings.chorusAmount * 0.35;
+    droneChorusDelay.delayTime.value = 0.018;
+    droneChorusWet.gain.value = defaultDroneSettings.chorusAmount;
+    droneChorusLfo.frequency.value = 0.23;
+    droneChorusDepth.gain.value = defaultDroneSettings.chorusAmount * 0.004;
     droneReverbWet.gain.value = defaultDroneSettings.reverbAmount;
     droneDelay.delayTime.value = defaultDroneSettings.delayTime;
-    droneDelayFeedback.gain.value = 0.45;
+    droneDelayFeedback.gain.value = defaultDroneSettings.delayFeedback;
     droneDelayWet.gain.value = defaultDroneSettings.delayAmount;
+    droneNoise.buffer = createNoiseBuffer(context);
+    droneNoise.loop = true;
+    droneNoiseFilter.type = 'lowpass';
+    droneNoiseFilter.frequency.value = 720;
+    droneNoiseGain.gain.value = 0;
     droneDelay.connect(droneDelayFeedback);
     droneDelayFeedback.connect(droneDelay);
+    droneChorusLfo.connect(droneChorusDepth);
+    droneChorusDepth.connect(droneChorusDelay.delayTime);
+    droneChorusLfo.start();
+    droneNoise.connect(droneNoiseFilter);
+    droneNoiseFilter.connect(droneNoiseGain);
+    droneNoiseGain.connect(droneDry);
+    droneNoiseGain.connect(droneReverb);
+    droneNoiseGain.connect(droneDelay);
+    droneNoise.start();
     master.connect(compressor);
     compressor.connect(analyser);
     analyser.connect(context.destination);
     compressor.connect(capture);
-    droneDry.connect(droneMaster);
+    droneDry.connect(droneBus);
     droneReverb.connect(droneReverbWet);
-    droneReverbWet.connect(droneMaster);
+    droneReverbWet.connect(droneBus);
     droneDelay.connect(droneDelayWet);
-    droneDelayWet.connect(droneMaster);
+    droneDelayWet.connect(droneBus);
     droneDelayWet.connect(droneReverb);
+    droneBus.connect(droneDrive);
+    droneDrive.connect(droneChorusDry);
+    droneDrive.connect(droneChorusDelay);
+    droneChorusDelay.connect(droneChorusWet);
+    droneChorusDry.connect(droneMaster);
+    droneChorusWet.connect(droneMaster);
     droneMaster.connect(master);
-    graphRef.current = { context, master, compressor, analyser, capture, voices: new Map(), droneMaster, droneDry, droneReverb, droneReverbWet, droneDelay, droneDelayFeedback, droneDelayWet, droneVoices: new Map() };
+    graphRef.current = { context, master, compressor, analyser, capture, voices: new Map(), droneMaster, droneBus, droneDrive, droneChorusDry, droneChorusDelay, droneChorusWet, droneChorusLfo, droneChorusDepth, droneDry, droneReverb, droneReverbWet, droneDelay, droneDelayFeedback, droneDelayWet, droneNoise, droneNoiseFilter, droneNoiseGain, droneVoices: new Map() };
     await context.resume();
     return graphRef.current;
   }, []);
@@ -464,7 +519,7 @@ export default function Home() {
     addEvent(`${voice.name} / ${origin}`, 'voice');
   }, [addEvent, ensureAudio, latchedVoices, stopVoice]);
 
-  const triggerPercussion = useCallback(async (id: number, origin: 'gesture' | 'cell' = 'gesture') => {
+  const triggerPercussion = useCallback(async (id: number, origin: 'gesture' | 'cell' | 'held drone' = 'gesture') => {
     const graph = await ensureAudio();
     const item = percussion[id];
     const now = graph.context.currentTime;
@@ -532,6 +587,8 @@ export default function Home() {
       try { voice.filterLfo.stop(); } catch {}
       try { voice.pitchLfo.stop(); } catch {}
       try { voice.volLfo.stop(); } catch {}
+      try { voice.panLfo.stop(); } catch {}
+      if (voice.randomInterval) window.clearInterval(voice.randomInterval);
     }, 650);
     graph.droneVoices.delete(id);
     setDroneVoiceCount(graph.droneVoices.size);
@@ -553,6 +610,7 @@ export default function Home() {
     const id = droneVoiceIdRef.current += 1;
     const voiceGain = graph.context.createGain();
     const filter = graph.context.createBiquadFilter();
+    const panner = graph.context.createStereoPanner();
     filter.type = 'lowpass';
     filter.frequency.value = 800;
     filter.Q.value = 2;
@@ -570,19 +628,24 @@ export default function Home() {
     const filterLfo = graph.context.createOscillator();
     filterLfo.frequency.value = settings.filterRate * (dronePrimes[Math.floor(nextDroneRandom() * dronePrimes.length)] / 10);
     const filterLfoGain = graph.context.createGain();
-    filterLfoGain.gain.value = settings.filterDepth * 3000;
+    filterLfoGain.gain.value = settings.modulationShape === 'sine' ? settings.filterDepth * 3000 : 0;
     filterLfo.connect(filterLfoGain); filterLfoGain.connect(filter.frequency); filterLfo.start();
     const pitchLfo = graph.context.createOscillator();
     pitchLfo.frequency.value = settings.filterRate * 0.3 * (dronePrimes[Math.floor(nextDroneRandom() * dronePrimes.length)] / 10);
     const pitchLfoGain = graph.context.createGain();
-    pitchLfoGain.gain.value = settings.pitchDrift * 50;
+    pitchLfoGain.gain.value = settings.modulationShape === 'sine' ? settings.pitchDrift * 50 : 0;
     pitchLfo.connect(pitchLfoGain); oscillators.forEach(({ osc }) => pitchLfoGain.connect(osc.detune)); pitchLfo.start();
     const volLfo = graph.context.createOscillator();
     volLfo.frequency.value = settings.filterRate * 0.5 * (dronePrimes[Math.floor(nextDroneRandom() * dronePrimes.length)] / 10);
     const volLfoGain = graph.context.createGain();
-    volLfoGain.gain.value = settings.volLfoDepth * 0.3;
+    volLfoGain.gain.value = settings.modulationShape === 'sine' ? settings.volLfoDepth * 0.3 : 0;
     volLfo.connect(volLfoGain); volLfoGain.connect(voiceGain.gain); volLfo.start();
-    filter.connect(voiceGain); voiceGain.connect(graph.droneDry); voiceGain.connect(graph.droneReverb); voiceGain.connect(graph.droneDelay);
+    const panLfo = graph.context.createOscillator();
+    panLfo.frequency.value = settings.filterRate * 0.37 * (dronePrimes[Math.floor(nextDroneRandom() * dronePrimes.length)] / 10);
+    const panLfoGain = graph.context.createGain();
+    panLfoGain.gain.value = settings.modulationShape === 'sine' ? settings.panDepth : 0;
+    panLfo.connect(panLfoGain); panLfoGain.connect(panner.pan); panLfo.start();
+    filter.connect(voiceGain); voiceGain.connect(panner); panner.connect(graph.droneDry); panner.connect(graph.droneReverb); panner.connect(graph.droneDelay);
     const attackTime = 3 + nextDroneRandom() * 5;
     const releaseTime = 6 + nextDroneRandom() * 8;
     const sustainLevel = 0.15 + nextDroneRandom() * 0.1;
@@ -591,7 +654,18 @@ export default function Home() {
     voiceGain.gain.linearRampToValueAtTime(sustainLevel, now + attackTime);
     voiceGain.gain.setValueAtTime(sustainLevel, now + noteDuration);
     voiceGain.gain.linearRampToValueAtTime(0.001, now + noteDuration + releaseTime);
-    const voice = { noteName, oscillators, voiceGain, filter, filterLfo, filterLfoGain, pitchLfo, pitchLfoGain, volLfo, volLfoGain };
+    let randomInterval: number | null = null;
+    if (settings.modulationShape === 'random') {
+      const intervalMs = Math.max(480, 1000 / Math.max(0.01, settings.filterRate * 4));
+      randomInterval = window.setInterval(() => {
+        const time = graph.context.currentTime;
+        const glide = Math.max(0.18, intervalMs / 1000 * 0.78);
+        filter.frequency.setTargetAtTime(240 + nextDroneRandom() * settings.filterDepth * 4200, time, glide);
+        panner.pan.setTargetAtTime((nextDroneRandom() * 2 - 1) * settings.panDepth, time, glide);
+        oscillators.forEach(({ osc }) => osc.detune.setTargetAtTime((nextDroneRandom() * 2 - 1) * settings.pitchDrift * 50, time, glide));
+      }, intervalMs);
+    }
+    const voice = { noteName, oscillators, voiceGain, filter, panner, filterLfo, filterLfoGain, pitchLfo, pitchLfoGain, volLfo, volLfoGain, panLfo, panLfoGain, randomInterval };
     graph.droneVoices.set(id, voice);
     setDroneVoiceCount(graph.droneVoices.size);
     setDroneNotes(Array.from(graph.droneVoices.values()).map((item) => item.noteName));
@@ -657,6 +731,20 @@ export default function Home() {
 
   const updateDroneSetting = <K extends keyof DroneSettings>(key: K, value: DroneSettings[K]) => {
     setDroneSettings((previous) => ({ ...previous, [key]: value }));
+    if (key === 'basePitch') {
+      const midi = Math.round(69 + 12 * Math.log2(Number(value) / 440));
+      setRoot(((midi % 12) + 12) % 12);
+    }
+    if (key === 'filterDepth') setMacros((previous) => ({ ...previous, movement: Math.round(Number(value) * 100) }));
+    if (key === 'volLfoDepth') setMacros((previous) => ({ ...previous, tension: Math.round(Number(value) * 100) }));
+    if (key === 'reverbAmount') setMacros((previous) => ({ ...previous, space: Math.round(Number(value) * 100) }));
+    if (key === 'driveAmount') setMacros((previous) => ({ ...previous, damage: Math.round(Number(value) * 100) }));
+    if (key === 'maxVoices') setMacros((previous) => ({ ...previous, density: Math.round((Number(value) / 12) * 100) }));
+    if (key === 'scale') {
+      const linkedScale: Partial<Record<DroneScaleName, ScaleName>> = { minor: 'minor', dorian: 'dorian', phrygian: 'phrygian', pentaMinor: 'pentatonic' };
+      const nextScale = linkedScale[value as DroneScaleName];
+      if (nextScale) setScale(nextScale);
+    }
   };
 
   const togglePower = useCallback(async () => {
@@ -793,15 +881,40 @@ export default function Home() {
     graph.droneDry.gain.setTargetAtTime(1 - droneSettings.reverbAmount * 0.5, now, 0.12);
     graph.droneDelayWet.gain.setTargetAtTime(droneSettings.delayAmount, now, 0.12);
     graph.droneDelay.delayTime.setTargetAtTime(droneSettings.delayTime, now, 0.12);
+    graph.droneDelayFeedback.gain.setTargetAtTime(droneSettings.delayFeedback, now, 0.12);
+    graph.droneDrive.curve = createDriveCurve(droneSettings.driveAmount);
+    graph.droneChorusDry.gain.setTargetAtTime(1 - droneSettings.chorusAmount * 0.35, now, 0.12);
+    graph.droneChorusWet.gain.setTargetAtTime(droneSettings.chorusAmount, now, 0.12);
+    graph.droneChorusDepth.gain.setTargetAtTime(droneSettings.chorusAmount * 0.004, now, 0.12);
+    graph.droneChorusLfo.frequency.setTargetAtTime(0.12 + droneSettings.filterRate * 2, now, 0.2);
+    graph.droneNoiseGain.gain.setTargetAtTime(droneRunning ? droneSettings.noiseAmount * 0.12 : 0, now, 0.24);
+    graph.droneNoiseFilter.type = droneSettings.noiseColor === 'white' ? 'allpass' : 'lowpass';
+    graph.droneNoiseFilter.frequency.setTargetAtTime(droneSettings.noiseColor === 'brown' ? 720 : droneSettings.noiseColor === 'pink' ? 3800 : 12000, now, 0.18);
     graph.droneVoices.forEach((voice) => {
+      const sine = droneSettings.modulationShape === 'sine';
       voice.filterLfo.frequency.setTargetAtTime(droneSettings.filterRate, now, 0.2);
-      voice.filterLfoGain.gain.setTargetAtTime(droneSettings.filterDepth * 3000, now, 0.2);
+      voice.filterLfoGain.gain.setTargetAtTime(sine ? droneSettings.filterDepth * 3000 : 0, now, 0.2);
       voice.pitchLfo.frequency.setTargetAtTime(droneSettings.filterRate * 0.3, now, 0.2);
-      voice.pitchLfoGain.gain.setTargetAtTime(droneSettings.pitchDrift * 50, now, 0.2);
+      voice.pitchLfoGain.gain.setTargetAtTime(sine ? droneSettings.pitchDrift * 50 : 0, now, 0.2);
       voice.volLfo.frequency.setTargetAtTime(droneSettings.filterRate * 0.5, now, 0.2);
-      voice.volLfoGain.gain.setTargetAtTime(droneSettings.volLfoDepth * 0.3, now, 0.2);
+      voice.volLfoGain.gain.setTargetAtTime(sine ? droneSettings.volLfoDepth * 0.3 : 0, now, 0.2);
+      voice.panLfo.frequency.setTargetAtTime(droneSettings.filterRate * 0.37, now, 0.2);
+      voice.panLfoGain.gain.setTargetAtTime(sine ? droneSettings.panDepth : 0, now, 0.2);
+      if (voice.randomInterval) window.clearInterval(voice.randomInterval);
+      voice.randomInterval = null;
+      if (!sine) {
+        const intervalMs = Math.max(480, 1000 / Math.max(0.01, droneSettings.filterRate * 4));
+        voice.randomInterval = window.setInterval(() => {
+          const settings = droneSettingsRef.current;
+          const time = graph.context.currentTime;
+          const glide = Math.max(0.18, intervalMs / 1000 * 0.78);
+          voice.filter.frequency.setTargetAtTime(240 + nextDroneRandom() * settings.filterDepth * 4200, time, glide);
+          voice.panner.pan.setTargetAtTime((nextDroneRandom() * 2 - 1) * settings.panDepth, time, glide);
+          voice.oscillators.forEach(({ osc }) => osc.detune.setTargetAtTime((nextDroneRandom() * 2 - 1) * settings.pitchDrift * 50, time, glide));
+        }, intervalMs);
+      }
     });
-  }, [droneSettings]);
+  }, [droneRunning, droneSettings, nextDroneRandom]);
 
   useEffect(() => {
     const canvas = droneCanvasRef.current;
@@ -847,11 +960,12 @@ export default function Home() {
   }, [powered]);
 
   const saveScene = useCallback((slot: string) => {
-    const next = { ...scenes, [slot]: { macros, cells, patches, sequence: { tracks: sequenceTracks, bpm, root, scale, swing } } }; setScenes(next); setActiveScene(slot); localStorage.setItem('hi-drone-scenes', JSON.stringify(next)); addEvent(`scene ${slot} stored`, 'scene'); setNotice(`scene ${slot} held in local memory`);
-  }, [addEvent, bpm, cells, macros, patches, root, scale, scenes, sequenceTracks, swing]);
+    const next = { ...scenes, [slot]: { macros, cells, patches, drone: droneSettings, sequence: { tracks: sequenceTracks, bpm, root, scale, swing } } }; setScenes(next); setActiveScene(slot); localStorage.setItem('hi-drone-scenes', JSON.stringify(next)); addEvent(`scene ${slot} stored`, 'scene'); setNotice(`scene ${slot} held in local memory`);
+  }, [addEvent, bpm, cells, droneSettings, macros, patches, root, scale, scenes, sequenceTracks, swing]);
   const loadScene = useCallback((slot: string) => {
     const scene = scenes[slot]; if (!scene) { saveScene(slot); return; }
     setMacros(scene.macros); setCells(scene.cells); setPatches(scene.patches);
+    if (scene.drone) setDroneSettings(scene.drone);
     if (scene.sequence) { setSequenceTracks(scene.sequence.tracks); setBpm(scene.sequence.bpm); setRoot(scene.sequence.root); setScale(scene.sequence.scale); setSwing(scene.sequence.swing); }
     setActiveScene(slot); setActivePreset(null); addEvent(`scene ${slot} recalled`, 'scene'); setNotice(`scene ${slot} is breathing`);
   }, [addEvent, saveScene, scenes]);
@@ -870,6 +984,15 @@ export default function Home() {
   const applyPreset = useCallback((preset: Preset) => {
     const world = presetSequenceWorlds[preset.name];
     setMacros(preset.macros);
+    setDroneSettings((previous) => ({
+      ...previous,
+      filterDepth: preset.macros.movement / 100,
+      volLfoDepth: preset.macros.tension / 100,
+      reverbAmount: preset.macros.space / 100,
+      driveAmount: preset.macros.damage / 100,
+      maxVoices: clamp(Math.round((preset.macros.density / 100) * 12), 1, 12),
+      scale: world?.scale === 'major' ? 'pentaMajor' : world?.scale === 'pentatonic' ? 'pentaMinor' : (world?.scale ?? previous.scale) as DroneScaleName,
+    }));
     setCells(preset.cells.map((cell) => ({ ...cell })));
     if (world) { setSequenceTracks(buildSequenceTracks(world)); setBpm(world.bpm); setRoot(world.root); setScale(world.scale); setSwing(world.swing); }
     setActivePreset(preset.name);
@@ -903,7 +1026,15 @@ export default function Home() {
   const saveLastMoment = useCallback(() => { setCaptureState('held'); setNotice(events.length ? `last ${events.length} gestures held in the timeline` : 'nothing has happened yet'); addEvent('last moment held', 'gesture'); }, [addEvent, events.length]);
   const downloadTake = useCallback((extension: string) => { if (!take) return; const url = URL.createObjectURL(take); const link = document.createElement('a'); link.href = url; link.download = `hi-drone-${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.${extension}`; link.click(); URL.revokeObjectURL(url); }, [take]);
 
-  const updateMacro = (key: keyof Macros, value: number) => { setMacros((previous) => ({ ...previous, [key]: value })); addEvent(`${key} ${value}`, 'gesture'); };
+  const updateMacro = (key: keyof Macros, value: number) => {
+    setMacros((previous) => ({ ...previous, [key]: value }));
+    if (key === 'movement') setDroneSettings((previous) => ({ ...previous, filterDepth: value / 100 }));
+    if (key === 'tension') setDroneSettings((previous) => ({ ...previous, volLfoDepth: value / 100 }));
+    if (key === 'space') setDroneSettings((previous) => ({ ...previous, reverbAmount: value / 100 }));
+    if (key === 'damage') setDroneSettings((previous) => ({ ...previous, driveAmount: value / 100 }));
+    if (key === 'density') setDroneSettings((previous) => ({ ...previous, maxVoices: clamp(Math.round((value / 100) * 12), 1, 12) }));
+    addEvent(`${key} ${value}`, 'gesture');
+  };
   const toggleLatch = (id: number) => { setLatchedVoices((previous) => previous.includes(id) ? previous.filter((voiceId) => voiceId !== id) : [...previous, id]); addEvent(`${voices[id].name} latch`, 'gesture'); };
   const toggleHold = (id: number) => { setHeldPercs((previous) => previous.includes(id) ? previous.filter((percId) => percId !== id) : [...previous, id]); addEvent(`${percussion[id].name} ${heldPercs.includes(id) ? 'released' : 'held as drone'}`, 'gesture'); };
   const updateTrackStructure = (id: number, key: 'length' | 'pulses' | 'rotate', value: number) => {
@@ -1026,10 +1157,32 @@ export default function Home() {
           <div className="drone-visualizer-wrap"><canvas ref={droneCanvasRef} aria-label="Live drone spectrum visualizer" /><div className="drone-viz-label">SPECTRUM / INCOMMENSURABLE WEATHER</div><div className={`drone-viz-status ${droneRunning && !dronePaused ? 'is-running' : ''}`}><span />{dronePaused ? 'PAUSED' : droneRunning ? 'GENERATING' : 'STANDBY'}</div></div>
           <div className="drone-readout"><span>ACTIVE VOICES <strong>{droneVoiceCount}</strong> / {droneSettings.maxVoices}</span><span>NOTES <strong>{droneNotes.length ? droneNotes.join(' · ') : '—'}</strong></span><span>SEED <strong>{droneSeed || 'AUTO'}</strong></span></div>
           <div className="drone-control-grid">
-            <section className="drone-control-panel"><h3>TONE</h3><label><span>BASE PITCH <output>{droneSettings.basePitch} Hz</output></span><input type="range" min="27" max="110" value={droneSettings.basePitch} onChange={(event) => updateDroneSetting('basePitch', Number(event.target.value))} /></label><label><span>DETUNE SPREAD <output>{droneSettings.detuneCents} cents</output></span><input type="range" min="0" max="30" value={droneSettings.detuneCents} onChange={(event) => updateDroneSetting('detuneCents', Number(event.target.value))} /></label><label><span>OSCILLATORS <output>{droneSettings.oscCount}</output></span><input type="range" min="2" max="8" value={droneSettings.oscCount} onChange={(event) => updateDroneSetting('oscCount', Number(event.target.value))} /></label><div className="drone-button-row"><span>WAVEFORM</span>{(['sine', 'triangle', 'sawtooth'] as OscillatorType[]).map((waveform) => <button key={waveform} className={droneSettings.waveform === waveform ? 'is-active' : ''} type="button" onClick={() => updateDroneSetting('waveform', waveform)}>{waveform === 'sawtooth' ? 'SAW' : waveform === 'triangle' ? 'TRI' : 'SINE'}</button>)}</div></section>
-            <section className="drone-control-panel"><h3>MODULATION</h3><label><span>FILTER SWEEP SPEED <output>{droneSettings.filterRate.toFixed(3)} Hz</output></span><input type="range" min="0.005" max="0.5" step="0.005" value={droneSettings.filterRate} onChange={(event) => updateDroneSetting('filterRate', Number(event.target.value))} /></label><label><span>FILTER DEPTH <output>{Math.round(droneSettings.filterDepth * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.filterDepth * 100} onChange={(event) => updateDroneSetting('filterDepth', Number(event.target.value) / 100)} /></label><label><span>PITCH DRIFT <output>{Math.round(droneSettings.pitchDrift * 100)}%</output></span><input type="range" min="0" max="50" value={droneSettings.pitchDrift * 100} onChange={(event) => updateDroneSetting('pitchDrift', Number(event.target.value) / 100)} /></label><label><span>VOLUME SWELL <output>{Math.round(droneSettings.volLfoDepth * 100)}%</output></span><input type="range" min="0" max="80" value={droneSettings.volLfoDepth * 100} onChange={(event) => updateDroneSetting('volLfoDepth', Number(event.target.value) / 100)} /></label></section>
-            <section className="drone-control-panel"><h3>SPACE</h3><label><span>REVERB <output>{Math.round(droneSettings.reverbAmount * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.reverbAmount * 100} onChange={(event) => updateDroneSetting('reverbAmount', Number(event.target.value) / 100)} /></label><label><span>DELAY <output>{Math.round(droneSettings.delayAmount * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.delayAmount * 100} onChange={(event) => updateDroneSetting('delayAmount', Number(event.target.value) / 100)} /></label><label><span>DELAY TIME <output>{droneSettings.delayTime.toFixed(1)} s</output></span><input type="range" min="0.1" max="3" step="0.1" value={droneSettings.delayTime} onChange={(event) => updateDroneSetting('delayTime', Number(event.target.value))} /></label><label><span>MASTER VOLUME <output>{Math.round(droneSettings.masterVolume * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.masterVolume * 100} onChange={(event) => updateDroneSetting('masterVolume', Number(event.target.value) / 100)} /></label></section>
-            <section className="drone-control-panel drone-control-panel-full"><h3>SCALE & GENERATION</h3><div className="drone-scale-row">{(Object.keys(droneScales) as DroneScaleName[]).map((name) => <button key={name} className={droneSettings.scale === name ? 'is-active' : ''} type="button" onClick={() => updateDroneSetting('scale', name)}>{droneScales[name].label}</button>)}</div><label><span>NEW NOTE INTERVAL <output>{droneSettings.genSpeed} s</output></span><input type="range" min="2" max="30" value={droneSettings.genSpeed} onChange={(event) => updateDroneSetting('genSpeed', Number(event.target.value))} /></label><label><span>MAX VOICES <output>{droneSettings.maxVoices}</output></span><input type="range" min="1" max="12" value={droneSettings.maxVoices} onChange={(event) => updateDroneSetting('maxVoices', Number(event.target.value))} /></label><div className="drone-engine-actions"><button className="drone-begin-button" type="button" onClick={droneRunning ? toggleDronePause : startDroneEngine}>{droneRunning ? (dronePaused ? 'RESUME GENERATOR' : 'PAUSE GENERATOR') : 'BEGIN DRONE ENGINE'}</button><button type="button" onClick={newDroneSeed}>NEW SEED</button><button className="drone-stop-button" type="button" onClick={() => { stopAllDroneVoices(); setDroneRunning(false); droneRunningRef.current = false; setDronePaused(false); setNotice('drone voices released — the rest of the instrument is still here'); addEvent('drone voices stopped', 'gesture'); }}>STOP ALL</button></div></section>
+            <section className="drone-control-panel"><h3>TONE</h3>
+              <label><span>BASE PITCH / SEQUENCE ROOT <output>{droneSettings.basePitch} Hz</output></span><input type="range" min="27" max="110" value={droneSettings.basePitch} onChange={(event) => updateDroneSetting('basePitch', Number(event.target.value))} /></label>
+              <label><span>DETUNE SPREAD <output>{droneSettings.detuneCents} cents</output></span><input type="range" min="0" max="30" value={droneSettings.detuneCents} onChange={(event) => updateDroneSetting('detuneCents', Number(event.target.value))} /></label>
+              <label><span>OSCILLATORS <output>{droneSettings.oscCount}</output></span><input type="range" min="2" max="8" value={droneSettings.oscCount} onChange={(event) => updateDroneSetting('oscCount', Number(event.target.value))} /></label>
+              <label><span>NOISE BED <output>{Math.round(droneSettings.noiseAmount * 100)}%</output></span><input type="range" min="0" max="60" value={droneSettings.noiseAmount * 100} onChange={(event) => updateDroneSetting('noiseAmount', Number(event.target.value) / 100)} /></label>
+              <div className="drone-button-row"><span>WAVEFORM</span>{(['sine', 'triangle', 'sawtooth'] as OscillatorType[]).map((waveform) => <button key={waveform} className={droneSettings.waveform === waveform ? 'is-active' : ''} type="button" onClick={() => updateDroneSetting('waveform', waveform)}>{waveform === 'sawtooth' ? 'SAW' : waveform === 'triangle' ? 'TRI' : 'SINE'}</button>)}</div>
+              <div className="drone-button-row"><span>NOISE COLOUR</span>{(['brown', 'pink', 'white'] as NoiseColor[]).map((color) => <button key={color} className={droneSettings.noiseColor === color ? 'is-active' : ''} type="button" onClick={() => updateDroneSetting('noiseColor', color)}>{color.toUpperCase()}</button>)}</div>
+            </section>
+            <section className="drone-control-panel"><h3>MODULATION</h3>
+              <div className="drone-button-row drone-shape-row"><span>MOTION SHAPE</span>{(['sine', 'random'] as ModulationShape[]).map((shape) => <button key={shape} className={droneSettings.modulationShape === shape ? 'is-active' : ''} type="button" onClick={() => updateDroneSetting('modulationShape', shape)}>{shape.toUpperCase()}</button>)}</div>
+              <label><span>FILTER SWEEP SPEED <output>{droneSettings.filterRate.toFixed(3)} Hz</output></span><input type="range" min="0.005" max="0.5" step="0.005" value={droneSettings.filterRate} onChange={(event) => updateDroneSetting('filterRate', Number(event.target.value))} /></label>
+              <label><span>FILTER DEPTH / MOVEMENT <output>{Math.round(droneSettings.filterDepth * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.filterDepth * 100} onChange={(event) => updateDroneSetting('filterDepth', Number(event.target.value) / 100)} /></label>
+              <label><span>PITCH DRIFT <output>{Math.round(droneSettings.pitchDrift * 100)}%</output></span><input type="range" min="0" max="50" value={droneSettings.pitchDrift * 100} onChange={(event) => updateDroneSetting('pitchDrift', Number(event.target.value) / 100)} /></label>
+              <label><span>VOLUME SWELL / TENSION <output>{Math.round(droneSettings.volLfoDepth * 100)}%</output></span><input type="range" min="0" max="80" value={droneSettings.volLfoDepth * 100} onChange={(event) => updateDroneSetting('volLfoDepth', Number(event.target.value) / 100)} /></label>
+              <label><span>PAN DRIFT <output>{Math.round(droneSettings.panDepth * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.panDepth * 100} onChange={(event) => updateDroneSetting('panDepth', Number(event.target.value) / 100)} /></label>
+            </section>
+            <section className="drone-control-panel"><h3>SPACE</h3>
+              <label><span>REVERB / SPACE <output>{Math.round(droneSettings.reverbAmount * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.reverbAmount * 100} onChange={(event) => updateDroneSetting('reverbAmount', Number(event.target.value) / 100)} /></label>
+              <label><span>DELAY <output>{Math.round(droneSettings.delayAmount * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.delayAmount * 100} onChange={(event) => updateDroneSetting('delayAmount', Number(event.target.value) / 100)} /></label>
+              <label><span>DELAY TIME <output>{droneSettings.delayTime.toFixed(1)} s</output></span><input type="range" min="0.1" max="3" step="0.1" value={droneSettings.delayTime} onChange={(event) => updateDroneSetting('delayTime', Number(event.target.value))} /></label>
+              <label><span>FEEDBACK <output>{Math.round(droneSettings.delayFeedback * 100)}%</output></span><input type="range" min="0" max="85" value={droneSettings.delayFeedback * 100} onChange={(event) => updateDroneSetting('delayFeedback', Number(event.target.value) / 100)} /></label>
+              <label><span>CHORUS <output>{Math.round(droneSettings.chorusAmount * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.chorusAmount * 100} onChange={(event) => updateDroneSetting('chorusAmount', Number(event.target.value) / 100)} /></label>
+              <label><span>DRIVE / DAMAGE <output>{Math.round(droneSettings.driveAmount * 100)}%</output></span><input type="range" min="0" max="55" value={droneSettings.driveAmount * 100} onChange={(event) => updateDroneSetting('driveAmount', Number(event.target.value) / 100)} /></label>
+              <label><span>MASTER VOLUME <output>{Math.round(droneSettings.masterVolume * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.masterVolume * 100} onChange={(event) => updateDroneSetting('masterVolume', Number(event.target.value) / 100)} /></label>
+            </section>
+            <section className="drone-control-panel drone-control-panel-full"><h3>SCALE & GENERATION</h3><div className="drone-scale-row">{(Object.keys(droneScales) as DroneScaleName[]).map((name) => <button key={name} className={droneSettings.scale === name ? 'is-active' : ''} type="button" onClick={() => updateDroneSetting('scale', name)}>{droneScales[name].label}</button>)}</div><div className="drone-generation-grid"><label><span>NEW NOTE INTERVAL <output>{droneSettings.genSpeed} s</output></span><input type="range" min="2" max="30" value={droneSettings.genSpeed} onChange={(event) => updateDroneSetting('genSpeed', Number(event.target.value))} /></label><label><span>MAX VOICES / DENSITY <output>{droneSettings.maxVoices}</output></span><input type="range" min="1" max="12" value={droneSettings.maxVoices} onChange={(event) => updateDroneSetting('maxVoices', Number(event.target.value))} /></label></div><div className="drone-engine-actions"><button className="drone-begin-button" type="button" onClick={droneRunning ? toggleDronePause : startDroneEngine}>{droneRunning ? (dronePaused ? 'RESUME GENERATOR' : 'PAUSE GENERATOR') : 'BEGIN DRONE ENGINE'}</button><button type="button" onClick={newDroneSeed}>NEW SEED</button><button className="drone-stop-button" type="button" onClick={() => { stopAllDroneVoices(); setDroneRunning(false); droneRunningRef.current = false; setDronePaused(false); setNotice('drone voices released — the rest of the instrument is still here'); addEvent('drone voices stopped', 'gesture'); }}>STOP ALL</button></div></section>
           </div>
           <p className="drone-engine-note">Web Audio only · multiple detuned oscillators · slow LFOs · procedural reverb · prime-number timing</p>
         </section>
