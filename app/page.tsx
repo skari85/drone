@@ -2,17 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
+import { isTauri } from '@tauri-apps/api/core';
+import { save as saveFileDialog } from '@tauri-apps/plugin-dialog';
+import { writeFile } from '@tauri-apps/plugin-fs';
 
 type DroneScaleName = 'minor' | 'dorian' | 'phrygian' | 'pentaMinor' | 'pentaMajor' | 'wholeTone' | 'harmonicMinor' | 'lydian';
 type ModulationShape = 'sine' | 'random';
 type NoiseColor = 'brown' | 'pink' | 'white';
 type SampleMode = 'granular' | 'loop';
 type PulsePattern = 'off' | 'steady' | 'doom' | 'sparse';
-type DroneSettings = { basePitch: number; detuneCents: number; oscCount: number; waveform: OscillatorType; modulationShape: ModulationShape; filterRate: number; filterDepth: number; pitchDrift: number; volLfoDepth: number; panDepth: number; noiseColor: NoiseColor; noiseAmount: number; reverbAmount: number; delayAmount: number; delayTime: number; delayFeedback: number; chorusAmount: number; driveAmount: number; masterVolume: number; scale: DroneScaleName; genSpeed: number; maxVoices: number };
+type DroneSettings = { basePitch: number; detuneCents: number; oscCount: number; waveform: OscillatorType; modulationShape: ModulationShape; filterRate: number; filterDepth: number; pitchDrift: number; volLfoDepth: number; panDepth: number; noiseColor: NoiseColor; noiseAmount: number; reverbAmount: number; delayAmount: number; delayTime: number; delayFeedback: number; chorusAmount: number; driveAmount: number; masterVolume: number; scale: DroneScaleName; genSpeed: number; maxVoices: number; eqLowGain: number; eqMidGain: number; eqHighGain: number; compThreshold: number; compRatio: number; limiterCeiling: number };
 type DroneVoiceNode = { noteName: string; semitone: number; oscillators: Array<{ osc: OscillatorNode; gain: GainNode }>; subOsc: OscillatorNode; subGain: GainNode; airOsc: OscillatorNode; airGain: GainNode; voiceGain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode; filterLfo: OscillatorNode; filterLfoGain: GainNode; pitchLfo: OscillatorNode; pitchLfoGain: GainNode; volLfo: OscillatorNode; volLfoGain: GainNode; panLfo: OscillatorNode; panLfoGain: GainNode; randomInterval: number | null };
 type SampleSettings = { grainRate: number; grainPitch: number; grainVolume: number; grainSize: number; grainDrift: number; grainDensity: number };
 type Graph = {
   context: AudioContext; master: GainNode; toneHigh: BiquadFilterNode; toneLow: BiquadFilterNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode;
+  eqLow: BiquadFilterNode; eqMid: BiquadFilterNode; eqHigh: BiquadFilterNode; limiter: DynamicsCompressorNode;
   droneMaster: GainNode; droneBus: GainNode; droneDrive: WaveShaperNode; droneChorusDry: GainNode; droneChorusDelay: DelayNode; droneChorusWet: GainNode; droneChorusLfo: OscillatorNode; droneChorusDepth: GainNode;
   droneDry: GainNode; droneReverb: ConvolverNode; droneReverbPreDelay: DelayNode; droneReverbWet: GainNode;
   droneDelay: DelayNode; droneDelayFilter: BiquadFilterNode; droneDelayFeedback: GainNode; droneDelayWet: GainNode;
@@ -36,14 +40,29 @@ const droneScales: Record<DroneScaleName, { label: string; intervals: number[] }
 };
 const dronePrimes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53];
 const noteNames = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
+const freqForSemitone = (semitone: number) => 16.351 * Math.pow(2, semitone / 12);
+const nameForSemitone = (semitone: number) => `${noteNames[((semitone % 12) + 12) % 12]}${Math.floor(semitone / 12)}`;
+// Keyboard Play: two QWERTY rows mapped to ascending degrees of the current
+// scale (never chromatic) — lower row one octave up from basePitch, upper
+// row a further octave up, so nothing you play can land off-scale.
+const keyboardRowLower = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'];
+const keyboardRowUpper = ['w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'];
+const keyboardKeyMap: Record<string, { degreeIndex: number; octaveOffset: number }> = {};
+keyboardRowLower.forEach((key, index) => { keyboardKeyMap[key] = { degreeIndex: index, octaveOffset: 12 }; });
+keyboardRowUpper.forEach((key, index) => { keyboardKeyMap[key] = { degreeIndex: index, octaveOffset: 24 }; });
 const defaultDroneSettings: DroneSettings = {
   basePitch: 55, detuneCents: 7, oscCount: 5, waveform: 'sine', modulationShape: 'sine', filterRate: 0.05, filterDepth: 0.6,
   pitchDrift: 0.15, volLfoDepth: 0.3, panDepth: 0.35, noiseColor: 'brown', noiseAmount: 0.12,
   reverbAmount: 0.7, delayAmount: 0.4, delayTime: 0.8, delayFeedback: 0.45, chorusAmount: 0.18, driveAmount: 0.04,
   masterVolume: 0.5, scale: 'minor', genSpeed: 8, maxVoices: 6,
+  eqLowGain: 0, eqMidGain: 0, eqHighGain: 0, compThreshold: -18, compRatio: 6, limiterCeiling: -1,
 };
 const defaultSampleSettings: SampleSettings = { grainRate: 0.5, grainPitch: -12, grainVolume: 0.6, grainSize: 2.0, grainDrift: 0.3, grainDensity: 4 };
 const MIC_MAX_SECONDS = 60;
+// Overall level for uploaded/recorded Audio Input playback. Was 0.4 — far
+// too conservative next to grain envelope peaks that were already quiet,
+// so samples were nearly inaudible; the master compressor keeps this safe.
+const SAMPLE_GAIN_SCALE = 1.15;
 const waveformOptions: Array<{ label: string; value: OscillatorType }> = [
   { label: 'Sine', value: 'sine' },
   { label: 'Tri', value: 'triangle' },
@@ -109,9 +128,6 @@ const floatTo16BitPCM = (input: Float32Array) => {
   return output;
 };
 
-type Mp3Encoder = { encodeBuffer: (left: Int16Array, right: Int16Array) => Uint8Array; flush: () => Uint8Array };
-type LameModule = { Mp3Encoder: new (channels: number, sampleRate: number, kbps: number) => Mp3Encoder };
-
 export default function DroneEnginePage() {
   const [started, setStarted] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -155,6 +171,12 @@ export default function DroneEnginePage() {
   const [wanderSpeed, setWanderSpeed] = useState(0.02);
   const [wanderDepth, setWanderDepth] = useState(40);
 
+  // Keyboard Play: press A S D F G H J K L (and W E R T Y U I O P an octave
+  // up) to play soft, scale-locked notes by hand — off by default, a peer
+  // to Pulse/Wander rather than the primary interaction.
+  const [keyboardPlayOn, setKeyboardPlayOn] = useState(false);
+  const [activeKeys, setActiveKeys] = useState<Record<string, boolean>>({});
+
   const graphRef = useRef<Graph | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const settingsRef = useRef(settings);
@@ -165,6 +187,7 @@ export default function DroneEnginePage() {
   const seedRef = useRef(0);
   const voiceIdRef = useRef(0);
   const generateNoteRef = useRef<() => void>(() => {});
+  const keyVoicesRef = useRef<Map<string, { oscillators: OscillatorNode[]; subOsc: OscillatorNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode }>>(new Map());
 
   const recordedLeftRef = useRef<Float32Array[]>([]);
   const recordedRightRef = useRef<Float32Array[]>([]);
@@ -194,7 +217,11 @@ export default function DroneEnginePage() {
     }
     const context = new AudioContext();
     const master = context.createGain();
+    const eqLow = context.createBiquadFilter();
+    const eqMid = context.createBiquadFilter();
+    const eqHigh = context.createBiquadFilter();
     const compressor = context.createDynamicsCompressor();
+    const limiter = context.createDynamicsCompressor();
     const analyser = context.createAnalyser();
     const droneMaster = context.createGain();
     const droneBus = context.createGain();
@@ -236,11 +263,28 @@ export default function DroneEnginePage() {
     droneDelayFilter.type = 'lowpass';
     droneDelayFilter.frequency.value = 2400;
     droneDelayFilter.Q.value = 0.5;
-    compressor.threshold.value = -18;
+    // Mastering: a simple 3-band EQ, then a compressor for glue, then a
+    // fast brickwall limiter as the final safety net before output.
+    eqLow.type = 'lowshelf';
+    eqLow.frequency.value = 200;
+    eqLow.gain.value = defaultDroneSettings.eqLowGain;
+    eqMid.type = 'peaking';
+    eqMid.frequency.value = 1000;
+    eqMid.Q.value = 0.9;
+    eqMid.gain.value = defaultDroneSettings.eqMidGain;
+    eqHigh.type = 'highshelf';
+    eqHigh.frequency.value = 4000;
+    eqHigh.gain.value = defaultDroneSettings.eqHighGain;
+    compressor.threshold.value = defaultDroneSettings.compThreshold;
     compressor.knee.value = 24;
-    compressor.ratio.value = 6;
+    compressor.ratio.value = defaultDroneSettings.compRatio;
     compressor.attack.value = 0.02;
     compressor.release.value = 0.35;
+    limiter.threshold.value = defaultDroneSettings.limiterCeiling;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.001;
+    limiter.release.value = 0.1;
     analyser.fftSize = 512;
     analyser.smoothingTimeConstant = 0.85;
     droneDry.gain.value = 1 - defaultDroneSettings.reverbAmount * 0.5;
@@ -267,9 +311,9 @@ export default function DroneEnginePage() {
     // delay sends the drone voices use ("through FX"), or goes straight to
     // master if the user wants it dry.
     sampleFilter.type = 'lowpass';
-    sampleFilter.frequency.value = 2000;
-    sampleFilter.Q.value = 1.5;
-    sampleGain.gain.value = defaultSampleSettings.grainVolume * 0.4;
+    sampleFilter.frequency.value = 9000;
+    sampleFilter.Q.value = 0.7;
+    sampleGain.gain.value = defaultSampleSettings.grainVolume * SAMPLE_GAIN_SCALE;
     sampleGain.connect(sampleFilter);
     sampleFilter.connect(droneDry);
     sampleFilter.connect(droneReverbPreDelay);
@@ -314,10 +358,14 @@ export default function DroneEnginePage() {
     droneNoiseGain.connect(droneReverbPreDelay);
     droneNoiseGain.connect(droneDelay);
     droneNoise.start();
-    master.connect(toneHigh);
+    master.connect(eqLow);
+    eqLow.connect(eqMid);
+    eqMid.connect(eqHigh);
+    eqHigh.connect(toneHigh);
     toneHigh.connect(toneLow);
     toneLow.connect(compressor);
-    compressor.connect(analyser);
+    compressor.connect(limiter);
+    limiter.connect(analyser);
     analyser.connect(context.destination);
     droneDry.connect(droneBus);
     droneReverbPreDelay.connect(droneReverb);
@@ -335,7 +383,7 @@ export default function DroneEnginePage() {
     droneMaster.connect(master);
 
     graphRef.current = {
-      context, master, toneHigh, toneLow, compressor, analyser, droneMaster, droneBus, droneDrive, droneChorusDry, droneChorusDelay, droneChorusWet, droneChorusLfo, droneChorusDepth,
+      context, master, toneHigh, toneLow, compressor, analyser, eqLow, eqMid, eqHigh, limiter, droneMaster, droneBus, droneDrive, droneChorusDry, droneChorusDelay, droneChorusWet, droneChorusLfo, droneChorusDepth,
       droneDry, droneReverb, droneReverbPreDelay, droneReverbWet, droneDelay, droneDelayFilter, droneDelayFeedback, droneDelayWet, droneNoise, droneNoiseFilter, droneNoiseGain,
       droneVoices: new Map(),
       sampleGain, sampleFilter, sampleBuffer: null, loopSource: null, granularTimer: null,
@@ -505,8 +553,7 @@ export default function DroneEnginePage() {
       const semitones = scale[scaleIndex % scale.length] + Math.floor(scaleIndex / scale.length) * 12;
       totalSemitones = baseMidi + semitones + (octave - 1) * 12;
     }
-    const frequency = 16.351 * Math.pow(2, totalSemitones / 12);
-    await createVoice(frequency, `${noteNames[((totalSemitones % 12) + 12) % 12]}${Math.floor(totalSemitones / 12)}`, totalSemitones);
+    await createVoice(freqForSemitone(totalSemitones), nameForSemitone(totalSemitones), totalSemitones);
     if (runningRef.current && !pausedRef.current) {
       const primeMultiplier = 0.7 + (dronePrimes[Math.floor(nextRandom() * 6)] / dronePrimes[6]) * 0.6;
       generationTimerRef.current = window.setTimeout(() => generateNoteRef.current(), current.genSpeed * primeMultiplier * 1000);
@@ -560,6 +607,12 @@ export default function DroneEnginePage() {
     if (!graph) return;
     const now = graph.context.currentTime;
     graph.droneMaster.gain.setTargetAtTime(settings.masterVolume, now, 0.08);
+    graph.eqLow.gain.setTargetAtTime(settings.eqLowGain, now, 0.1);
+    graph.eqMid.gain.setTargetAtTime(settings.eqMidGain, now, 0.1);
+    graph.eqHigh.gain.setTargetAtTime(settings.eqHighGain, now, 0.1);
+    graph.compressor.threshold.setTargetAtTime(settings.compThreshold, now, 0.1);
+    graph.compressor.ratio.setTargetAtTime(settings.compRatio, now, 0.1);
+    graph.limiter.threshold.setTargetAtTime(settings.limiterCeiling, now, 0.1);
     graph.droneReverbWet.gain.setTargetAtTime(settings.reverbAmount, now, 0.12);
     graph.droneDry.gain.setTargetAtTime(1 - settings.reverbAmount * 0.5, now, 0.12);
     graph.droneDelayWet.gain.setTargetAtTime(settings.delayAmount, now, 0.12);
@@ -625,7 +678,7 @@ export default function DroneEnginePage() {
     source.playbackRate.value = rate;
     source.detune.value = current.grainPitch * 100 + (Math.random() - 0.5) * 20;
     const grainGain = graph.context.createGain();
-    const peakLevel = 0.15 + Math.random() * 0.1;
+    const peakLevel = 0.55 + Math.random() * 0.25;
     const attackTime = grainDur * 0.3;
     const releaseTime = grainDur * 0.3;
     grainGain.gain.setValueAtTime(0, startTime);
@@ -634,7 +687,7 @@ export default function DroneEnginePage() {
     grainGain.gain.linearRampToValueAtTime(0, startTime + grainDur);
     const grainFilter = graph.context.createBiquadFilter();
     grainFilter.type = 'lowpass';
-    grainFilter.frequency.value = 800 + Math.random() * 1500;
+    grainFilter.frequency.value = 2200 + Math.random() * 4000;
     grainFilter.Q.value = 1 + Math.random() * 2;
     source.connect(grainFilter);
     grainFilter.connect(grainGain);
@@ -760,7 +813,7 @@ export default function DroneEnginePage() {
     const graph = graphRef.current;
     if (!graph) return;
     const now = graph.context.currentTime;
-    graph.sampleGain.gain.setTargetAtTime(sampleSettings.grainVolume * 0.4, now, 0.05);
+    graph.sampleGain.gain.setTargetAtTime(sampleSettings.grainVolume * SAMPLE_GAIN_SCALE, now, 0.05);
     if (graph.loopSource) {
       graph.loopSource.playbackRate.setTargetAtTime(sampleSettings.grainRate, now, 0.1);
       graph.loopSource.detune.setTargetAtTime(sampleSettings.grainPitch * 100, now, 0.1);
@@ -871,12 +924,11 @@ export default function DroneEnginePage() {
       recordedLeftRef.current = [];
       recordedRightRef.current = [];
 
-      // lamejs ships no TypeScript types, and it's dynamically imported so it
-      // never has to load until someone actually exports a recording.
-      // @ts-expect-error lamejs has no type declarations
-      const lameImport = (await import('lamejs')) as unknown as LameModule & { default?: LameModule };
-      const Mp3Encoder = lameImport.Mp3Encoder ?? lameImport.default?.Mp3Encoder;
-      if (!Mp3Encoder) throw new Error('MP3 encoder unavailable');
+      // Dynamically imported so the encoder never has to load until someone
+      // actually exports a recording. @breezystack/lamejs is a maintained,
+      // ESM-native fork of lamejs — the original `lamejs` package throws
+      // "MPEGMode is not defined" when bundled by Vite/Rollup.
+      const { Mp3Encoder } = await import('@breezystack/lamejs');
       const encoder = new Mp3Encoder(2, graph.context.sampleRate, 128);
       const mp3Data: Uint8Array[] = [];
       const blockSize = 1152;
@@ -889,20 +941,42 @@ export default function DroneEnginePage() {
       const tail = encoder.flush();
       if (tail.length > 0) mp3Data.push(new Uint8Array(tail));
 
-      const blob = new Blob(mp3Data as BlobPart[], { type: 'audio/mp3' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
+      const totalBytes = mp3Data.reduce((sum, chunk) => sum + chunk.length, 0);
+      const mp3Bytes = new Uint8Array(totalBytes);
+      let byteOffset = 0;
+      for (const chunk of mp3Data) { mp3Bytes.set(chunk, byteOffset); byteOffset += chunk.length; }
       const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-      link.download = `drone-engine-${timestamp}.mp3`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setRecordStatus(`Exported ${(blob.size / 1024 / 1024).toFixed(1)} MB`);
+      const filename = `hi-drone-${timestamp}.mp3`;
+      const sizeMb = (totalBytes / 1024 / 1024).toFixed(1);
+
+      // The Tauri desktop webview (WKWebView on macOS) doesn't support the
+      // browser <a download> + blob: URL pattern — clicks silently no-op,
+      // so exports there go through Tauri's native save dialog + fs write
+      // instead. The web build keeps the plain browser download.
+      if (isTauri()) {
+        const path = await saveFileDialog({ defaultPath: filename, filters: [{ name: 'MP3 Audio', extensions: ['mp3'] }] });
+        if (path) {
+          await writeFile(path, mp3Bytes);
+          setRecordStatus(`Saved ${sizeMb} MB`);
+        } else {
+          setRecordStatus('Export cancelled');
+        }
+      } else {
+        const blob = new Blob([mp3Bytes], { type: 'audio/mp3' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        setRecordStatus(`Exported ${sizeMb} MB`);
+      }
       setRecordTime('00:00');
     } catch (error) {
-      setRecordStatus(`Export failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+      const reason = error instanceof Error ? error.message : typeof error === 'string' ? error : 'unknown error';
+      setRecordStatus(`Export failed: ${reason}`);
     }
   }, []);
 
@@ -911,9 +985,9 @@ export default function DroneEnginePage() {
     if (!graph || !graph.recordProcessor) return;
     if (recordTickRef.current) { window.clearInterval(recordTickRef.current); recordTickRef.current = null; }
     const processor = graph.recordProcessor;
-    try { graph.master.disconnect(); } catch {}
+    try { graph.limiter.disconnect(); } catch {}
     try { processor.disconnect(); } catch {}
-    graph.master.connect(graph.toneHigh);
+    graph.limiter.connect(graph.analyser);
     graph.recordProcessor = null;
     setIsRecording(false);
     setRecordStatus('Encoding MP3…');
@@ -936,9 +1010,12 @@ export default function DroneEnginePage() {
       event.outputBuffer.getChannelData(0).set(leftIn);
       event.outputBuffer.getChannelData(1).set(rightIn);
     };
-    graph.master.disconnect();
-    graph.master.connect(processor);
-    processor.connect(graph.toneHigh);
+    // Tapped after the mastering chain (EQ/compressor/limiter), not at
+    // master — so live adjustments to any control, mastering included,
+    // are captured exactly as heard, not the pre-mastering signal.
+    graph.limiter.disconnect();
+    graph.limiter.connect(processor);
+    processor.connect(graph.analyser);
     graph.recordProcessor = processor;
     recordStartRef.current = Date.now();
     setIsRecording(true);
@@ -1000,6 +1077,98 @@ export default function DroneEnginePage() {
     graph.wanderToneGain.gain.setTargetAtTime(depth * 2600, now, 1.5);
     graph.wanderChorusGain.gain.setTargetAtTime(depth * 0.05, now, 1.5);
   }, [wanderOn, wanderSpeed, wanderDepth]);
+
+  // ── Keyboard Play: soft, scale-locked notes triggered by hand ────
+
+  const playKey = useCallback(async (key: string) => {
+    const mapping = keyboardKeyMap[key];
+    if (!mapping || keyVoicesRef.current.has(key)) return;
+    const graph = await ensureAudio();
+    const current = settingsRef.current;
+    const scale = droneScales[current.scale].intervals;
+    const baseMidi = Math.round(12 * Math.log2(current.basePitch / 16.351));
+    const octaveJump = Math.floor(mapping.degreeIndex / scale.length);
+    const semitone = scale[mapping.degreeIndex % scale.length] + octaveJump * 12;
+    const frequency = freqForSemitone(baseMidi + semitone + mapping.octaveOffset);
+    const now = graph.context.currentTime;
+
+    const filter = graph.context.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 1800;
+    filter.Q.value = 0.8;
+    const panner = graph.context.createStereoPanner();
+    panner.pan.value = (nextRandom() * 2 - 1) * 0.3;
+    const gain = graph.context.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    // Soft, near-instant attack (still no click) — subtle peak level so a
+    // held chord never outweighs the generative drone underneath it.
+    gain.gain.exponentialRampToValueAtTime(0.16, now + 0.08);
+
+    const oscillators: OscillatorNode[] = [];
+    for (const detune of [-6, 6]) {
+      const osc = graph.context.createOscillator();
+      const oscGain = graph.context.createGain();
+      osc.type = current.waveform;
+      osc.frequency.value = frequency;
+      osc.detune.value = detune;
+      oscGain.gain.value = 0.6;
+      osc.connect(oscGain); oscGain.connect(filter); osc.start();
+      oscillators.push(osc);
+    }
+    const subOsc = graph.context.createOscillator();
+    const subGain = graph.context.createGain();
+    subOsc.type = 'sine';
+    subOsc.frequency.value = frequency / 2;
+    subGain.gain.value = 0.3;
+    subOsc.connect(subGain); subGain.connect(filter); subOsc.start();
+
+    filter.connect(gain); gain.connect(panner);
+    panner.connect(graph.droneDry); panner.connect(graph.droneReverbPreDelay); panner.connect(graph.droneDelay);
+
+    keyVoicesRef.current.set(key, { oscillators, subOsc, gain, filter, panner });
+    setActiveKeys((previous) => ({ ...previous, [key]: true }));
+  }, [ensureAudio, nextRandom]);
+
+  const releaseKey = useCallback((key: string) => {
+    const graph = graphRef.current;
+    const voice = keyVoicesRef.current.get(key);
+    keyVoicesRef.current.delete(key);
+    setActiveKeys((previous) => { const next = { ...previous }; delete next[key]; return next; });
+    if (!graph || !voice) return;
+    const now = graph.context.currentTime;
+    voice.gain.gain.cancelScheduledValues(now);
+    voice.gain.gain.setTargetAtTime(0, now, 0.5);
+    window.setTimeout(() => {
+      voice.oscillators.forEach((osc) => { try { osc.stop(); } catch {} });
+      try { voice.subOsc.stop(); } catch {}
+      try { voice.filter.disconnect(); } catch {}
+      try { voice.gain.disconnect(); } catch {}
+      try { voice.panner.disconnect(); } catch {}
+    }, 1500);
+  }, []);
+
+  useEffect(() => {
+    if (!keyboardPlayOn) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      const key = event.key.toLowerCase();
+      if (!keyboardKeyMap[key]) return;
+      event.preventDefault();
+      void playKey(key);
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      releaseKey(event.key.toLowerCase());
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      Array.from(keyVoicesRef.current.keys()).forEach(releaseKey);
+    };
+  }, [keyboardPlayOn, playKey, releaseKey]);
 
   useEffect(() => {
     if (!started) return;
@@ -1070,7 +1239,8 @@ export default function DroneEnginePage() {
   return (
     <div className="container">
       <header>
-        <h1>Drone Engine</h1>
+        <img src="/logo.png" alt="" className="logo" />
+        <h1>Hi Drone</h1>
         <p>SELF-GENERATING AMBIENT SOUNDSCAPES</p>
       </header>
 
@@ -1263,6 +1433,48 @@ export default function DroneEnginePage() {
             </div>
 
             <div className="panel panel-full">
+              <h3>Mastering</h3>
+              <div className="mastering-grid">
+                <div>
+                  <div className="slider-label" style={{ marginBottom: 8 }}><span>EQ — 3-band, on the master bus</span></div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Bass (200 Hz)</span><span>{settings.eqLowGain > 0 ? '+' : ''}{settings.eqLowGain.toFixed(0)} dB</span></div>
+                    <input type="range" min="-12" max="12" step="1" value={settings.eqLowGain} onChange={(event) => updateSetting('eqLowGain', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Mid (1 kHz)</span><span>{settings.eqMidGain > 0 ? '+' : ''}{settings.eqMidGain.toFixed(0)} dB</span></div>
+                    <input type="range" min="-12" max="12" step="1" value={settings.eqMidGain} onChange={(event) => updateSetting('eqMidGain', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Treble (4 kHz)</span><span>{settings.eqHighGain > 0 ? '+' : ''}{settings.eqHighGain.toFixed(0)} dB</span></div>
+                    <input type="range" min="-12" max="12" step="1" value={settings.eqHighGain} onChange={(event) => updateSetting('eqHighGain', Number(event.target.value))} />
+                  </div>
+                </div>
+                <div>
+                  <div className="slider-label" style={{ marginBottom: 8 }}><span>Compressor — glues the mix together</span></div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Threshold</span><span>{settings.compThreshold.toFixed(0)} dB</span></div>
+                    <input type="range" min="-40" max="0" step="1" value={settings.compThreshold} onChange={(event) => updateSetting('compThreshold', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Ratio</span><span>{settings.compRatio.toFixed(0)}:1</span></div>
+                    <input type="range" min="1" max="20" step="1" value={settings.compRatio} onChange={(event) => updateSetting('compRatio', Number(event.target.value))} />
+                  </div>
+                </div>
+                <div>
+                  <div className="slider-label" style={{ marginBottom: 8 }}><span>Limiter — final safety ceiling</span></div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Ceiling</span><span>{settings.limiterCeiling.toFixed(1)} dB</span></div>
+                    <input type="range" min="-6" max="-0.1" step="0.1" value={settings.limiterCeiling} onChange={(event) => updateSetting('limiterCeiling', Number(event.target.value))} />
+                  </div>
+                </div>
+              </div>
+              <div className="sample-help">
+                All three stages sit on the master bus, after everything else sums together, and update live — mix while recording and every change lands in the export.
+              </div>
+            </div>
+
+            <div className="panel panel-full">
               <h3>Scale &amp; Generation</h3>
               <div className="scale-row" style={{ marginBottom: 16 }}>
                 {(Object.keys(droneScales) as DroneScaleName[]).map((name) => (
@@ -1317,6 +1529,48 @@ export default function DroneEnginePage() {
                     <div className="slider-label"><span>Wander depth</span><span>{wanderDepth}%</span></div>
                     <input type="range" min="0" max="100" step="1" value={wanderDepth} onChange={(event) => setWanderDepth(Number(event.target.value))} />
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="panel panel-full">
+              <h3>Keyboard Play</h3>
+              <div className="btn-row" style={{ marginBottom: 12 }}>
+                <button type="button" className={`btn${keyboardPlayOn ? ' active' : ''}`} onClick={() => setKeyboardPlayOn((previous) => !previous)}>{keyboardPlayOn ? 'Keyboard On' : 'Keyboard Off'}</button>
+              </div>
+              <div className="sample-help">
+                Play soft, in-scale notes by hand — they stay locked to the current scale and blend into the same room as everything else. <strong>A S D F G H J K L</strong> for the lower octave, <strong>W E R T Y U I O P</strong> for the octave above. Keys also work as buttons below.
+              </div>
+              <div className="keyboard-rows">
+                <div className="keyboard-row keyboard-row-upper">
+                  {keyboardRowUpper.map((key) => (
+                    <span
+                      key={key}
+                      className={`key-badge${activeKeys[key] ? ' active' : ''}`}
+                      onMouseDown={() => void playKey(key)}
+                      onMouseUp={() => releaseKey(key)}
+                      onMouseLeave={() => releaseKey(key)}
+                      onTouchStart={(event) => { event.preventDefault(); void playKey(key); }}
+                      onTouchEnd={(event) => { event.preventDefault(); releaseKey(key); }}
+                    >
+                      {key.toUpperCase()}
+                    </span>
+                  ))}
+                </div>
+                <div className="keyboard-row">
+                  {keyboardRowLower.map((key) => (
+                    <span
+                      key={key}
+                      className={`key-badge${activeKeys[key] ? ' active' : ''}`}
+                      onMouseDown={() => void playKey(key)}
+                      onMouseUp={() => releaseKey(key)}
+                      onMouseLeave={() => releaseKey(key)}
+                      onTouchStart={(event) => { event.preventDefault(); void playKey(key); }}
+                      onTouchEnd={(event) => { event.preventDefault(); releaseKey(key); }}
+                    >
+                      {key.toUpperCase()}
+                    </span>
+                  ))}
                 </div>
               </div>
             </div>

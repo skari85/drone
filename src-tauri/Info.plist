@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Drone Engine uses your microphone to record short sounds and vocals to weave into the generative drone.</string>
+	<string>Hi Drone uses your microphone to record short sounds and vocals to weave into the generative drone.</string>
 </dict>
 </plist>

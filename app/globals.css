@@ -40,6 +40,14 @@ header {
   margin-bottom: 48px;
 }
 
+.logo {
+  width: 64px;
+  height: 64px;
+  display: block;
+  margin: 0 auto 12px;
+  filter: drop-shadow(0 0 18px var(--accent-glow));
+}
+
 header h1 {
   font-family: 'Georgia', serif;
   font-size: 36px;
@@ -533,6 +541,69 @@ input[type="range"]::-moz-range-thumb {
 
 @media (max-width: 600px) {
   .pulse-wander-grid { grid-template-columns: 1fr; }
+}
+
+/* ── MASTERING ── */
+.mastering-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 24px;
+}
+
+@media (max-width: 700px) {
+  .mastering-grid { grid-template-columns: 1fr; }
+}
+
+/* ── KEYBOARD PLAY ── */
+.keyboard-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.keyboard-row {
+  display: flex;
+  gap: 6px;
+}
+
+.keyboard-row-upper {
+  margin-left: 20px;
+}
+
+.key-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-family: 'SF Mono', monospace;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.1s ease;
+}
+
+.key-badge:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.key-badge.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+@media (max-width: 600px) {
+  .key-badge { width: 28px; height: 28px; font-size: 11px; }
+  .keyboard-row-upper { margin-left: 16px; }
 }
 
 /* ── INFO ── */

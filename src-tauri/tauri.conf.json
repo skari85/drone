@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Drone Engine",
+  "productName": "Hi Drone",
   "version": "0.1.0",
   "identifier": "com.georgoskar.droneengine",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Drone Engine",
+        "title": "Hi Drone",
         "width": 1100,
         "height": 820,
         "minWidth": 640,
