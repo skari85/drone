@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drone Engine — Self-Generating Ambient Soundscapes</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --border: #1e1e2a;
+    --text: #c8c8d0;
+    --text-dim: #5a5a68;
+    --accent: #6c5ce7;
+    --accent-glow: rgba(108, 92, 231, 0.3);
+    --warm: #e17055;
+    --green: #00b894;
+    --radius: 8px;
+  }
+  
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, 'Helvetica Neue', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 24px;
+  }
+  
+  header {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+  
+  header h1 {
+    font-family: 'Georgia', serif;
+    font-size: 36px;
+    font-weight: 400;
+    letter-spacing: -0.5px;
+    color: #e8e8e8;
+    margin-bottom: 6px;
+  }
+  
+  header p {
+    font-size: 13px;
+    color: var(--text-dim);
+    letter-spacing: 1px;
+  }
+  
+  /* ── START BUTTON ── */
+  .start-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 50vh;
+    gap: 20px;
+  }
+  
+  .start-btn {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 18px 48px;
+    border-radius: 40px;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 0 40px var(--accent-glow);
+    letter-spacing: 0.5px;
+  }
+  
+  .start-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 60px var(--accent-glow);
+  }
+  
+  .start-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+    transform: none;
+  }
+  
+  .start-hint {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  
+  /* ── MAIN INTERFACE ── */
+  .interface {
+    display: none;
+    flex-direction: column;
+    gap: 32px;
+    animation: fadeIn 1s ease;
+  }
+  
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  
+  /* ── VISUALIZER ── */
+  .visualizer-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    position: relative;
+  }
+  
+  canvas {
+    display: block;
+    width: 100%;
+    height: 200px;
+  }
+  
+  .viz-label {
+    position: absolute;
+    top: 12px;
+    left: 16px;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    z-index: 1;
+  }
+  
+  .viz-status {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--green);
+    text-transform: uppercase;
+    z-index: 1;
+  }
+  
+  .viz-status::before {
+    content: "● ";
+    animation: pulse 2s ease infinite;
+  }
+  
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  
+  /* ── CONTROLS GRID ── */
+  .controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+  }
+  
+  @media (max-width: 600px) {
+    .controls { grid-template-columns: 1fr; }
+  }
+  
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  
+  .panel h3 {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  
+  .panel-full {
+    grid-column: 1 / -1;
+  }
+  
+  /* ── SLIDERS ── */
+  .slider-group {
+    margin-bottom: 18px;
+  }
+  
+  .slider-group:last-child { margin-bottom: 0; }
+  
+  .slider-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  
+  .slider-label span:first-child {
+    font-size: 12px;
+    color: var(--text);
+  }
+  
+  .slider-label span:last-child {
+    font-size: 11px;
+    color: var(--accent);
+    font-family: 'SF Mono', monospace;
+    min-width: 40px;
+    text-align: right;
+  }
+  
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+  
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 8px var(--accent-glow);
+    transition: transform 0.15s ease;
+  }
+  
+  input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+  }
+  
+  input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+  }
+  
+  /* ── BUTTONS ── */
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  
+  .btn {
+    background: var(--border);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 10px 20px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+  }
+  
+  .btn:hover {
+    background: #2a2a3a;
+    border-color: var(--accent);
+  }
+  
+  .btn.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+  
+  .btn-warm {
+    border-color: var(--warm);
+    color: var(--warm);
+  }
+  
+  .btn-warm:hover {
+    background: var(--warm);
+    color: white;
+  }
+  
+  /* ── SCALE BUTTONS ── */
+  .scale-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  
+  .scale-btn {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+    letter-spacing: 0.5px;
+  }
+  
+  .scale-btn:hover {
+    color: var(--text);
+    border-color: var(--text-dim);
+  }
+  
+  .scale-btn.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+  
+  /* ── INFO ── */
+  .info {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.6;
+    text-align: center;
+    margin-top: 8px;
+  }
+  
+  .info a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  
+  .now-playing {
+    text-align: center;
+    padding: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  
+  .now-playing strong {
+    color: var(--accent);
+  }
+  
+  .note-display {
+    display: inline-block;
+    padding: 2px 8px;
+    margin: 0 2px;
+    background: var(--border);
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--green);
+    transition: all 0.5s ease;
+  }
+  
+  .note-display.active {
+    background: var(--accent);
+    color: white;
+    box-shadow: 0 0 12px var(--accent-glow);
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>Drone Engine</h1>
+    <p>SELF-GENERATING AMBIENT SOUNDSCAPES</p>
+  </header>
+
+  <!-- START SCREEN -->
+  <div class="start-screen" id="startScreen">
+    <button class="start-btn" id="startBtn">BEGIN</button>
+    <p class="start-hint">Click to start audio. Best with headphones.</p>
+  </div>
+
+  <!-- MAIN INTERFACE -->
+  <div class="interface" id="interface">
+    
+    <!-- VISUALIZER -->
+    <div class="visualizer-wrap">
+      <div class="viz-label">Spectrum</div>
+      <div class="viz-status">Generating</div>
+      <canvas id="canvas"></canvas>
+    </div>
+    
+    <!-- NOW PLAYING -->
+    <div class="now-playing" id="nowPlaying">
+      Active voices: <strong id="voiceCount">0</strong> &nbsp;|&nbsp; 
+      Notes: <span id="noteDisplay"></span>
+    </div>
+    
+    <!-- CONTROLS -->
+    <div class="controls">
+      
+      <!-- TONE -->
+      <div class="panel">
+        <h3>Tone</h3>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Base pitch</span><span id="pitchVal">55 Hz</span></div>
+          <input type="range" id="pitch" min="27" max="110" value="55" step="1">
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Detune spread</span><span id="detuneVal">7 cents</span></div>
+          <input type="range" id="detune" min="0" max="30" value="7" step="1">
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Oscillators</span><span id="oscCountVal">5</span></div>
+          <input type="range" id="oscCount" min="2" max="8" value="5" step="1">
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Waveform</span></div>
+          <div class="btn-row" id="waveformBtns">
+            <button class="btn active" data-wave="sine">Sine</button>
+            <button class="btn" data-wave="triangle">Tri</button>
+            <button class="btn" data-wave="sawtooth">Saw</button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- MODULATION -->
+      <div class="panel">
+        <h3>Modulation</h3>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Filter sweep speed</span><span id="filterRateVal">0.05 Hz</span></div>
+          <input type="range" id="filterRate" min="0.005" max="0.5" value="0.05" step="0.005">
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Filter depth</span><span id="filterDepthVal">60%</span></div>
+          <input type="range" id="filterDepth" min="0" max="100" value="60" step="1">
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Pitch drift</span><span id="pitchDriftVal">15%</span></div>
+          <input type="range" id="pitchDrift" min="0" max="50" value="15" step="1">
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Volume swell</span><span id="volLfoVal">30%</span></div>
+          <input type="range" id="volLfo" min="0" max="80" value="30" step="1">
+        </div>
+      </div>
+      
+      <!-- SPACE -->
+      <div class="panel">
+        <h3>Space</h3>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Reverb</span><span id="reverbVal">70%</span></div>
+          <input type="range" id="reverb" min="0" max="100" value="70" step="1">
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Delay</span><span id="delayVal">40%</span></div>
+          <input type="range" id="delay" min="0" max="100" value="40" step="1">
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Delay time</span><span id="delayTimeVal">0.8 s</span></div>
+          <input type="range" id="delayTime" min="0.1" max="3" value="0.8" step="0.1">
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Master volume</span><span id="masterVal">50%</span></div>
+          <input type="range" id="master" min="0" max="100" value="50" step="1">
+        </div>
+      </div>
+      
+      <!-- SCALE & GENERATION -->
+      <div class="panel panel-full">
+        <h3>Scale & Generation</h3>
+        
+        <div class="scale-row" id="scaleRow" style="margin-bottom: 16px;">
+          <button class="scale-btn active" data-scale="minor">D Minor</button>
+          <button class="scale-btn" data-scale="dorian">D Dorian</button>
+          <button class="scale-btn" data-scale="phrygian">E Phrygian</button>
+          <button class="scale-btn" data-scale="pentaMinor">Pentatonic Min</button>
+          <button class="scale-btn" data-scale="pentaMajor">Pentatonic Maj</button>
+          <button class="scale-btn" data-scale="wholeTone">Whole Tone</button>
+          <button class="scale-btn" data-scale="harmonicMinor">Harmonic Minor</button>
+          <button class="scale-btn" data-scale="lydian">F Lydian</button>
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Generation speed (new note interval)</span><span id="genSpeedVal">8 s</span></div>
+          <input type="range" id="genSpeed" min="2" max="30" value="8" step="1">
+        </div>
+        
+        <div class="slider-group">
+          <div class="slider-label"><span>Max voices</span><span id="maxVoicesVal">6</span></div>
+          <input type="range" id="maxVoices" min="1" max="12" value="6" step="1">
+        </div>
+        
+        <div class="btn-row" style="margin-top: 16px;">
+          <button class="btn" id="pauseBtn">Pause</button>
+          <button class="btn" id="newSeedBtn">New Seed</button>
+          <button class="btn btn-warm" id="stopBtn">Stop All</button>
+        </div>
+      </div>
+      
+    </div>
+    
+    <div class="info">
+      Built with Web Audio API. Uses incommensurable timing, detuned oscillators, slow LFOs, and procedural reverb.
+      Inspired by Brian Eno's generative music systems. Every session sounds different.
+    </div>
+    
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+// DRONE ENGINE — Self-Generating Ambient Soundscape Machine
+// ════════════════════════════════════════════════════════════════
+//
+// Architecture:
+//   Each "voice" = multiple detuned oscillators → filter → gain → reverb/delay → master
+//   A generative scheduler picks notes from a scale at incommensurable intervals
+//   (using prime numbers so patterns never repeat exactly — Brian Eno's technique)
+//   Slow LFOs modulate filter cutoff, pitch, and volume for continuous evolution
+//
+//═══════════════════════════════════════════════════════════════
+
+let audioCtx = null;
+let masterGain, reverbNode, delayNode, delayFeedback, delayWet, reverbWet, dryGain;
+let analyser = null;
+let isRunning = false;
+let isPaused = false;
+
+// Active voices
+const activeVoices = new Map();
+let voiceIdCounter = 0;
+
+// Scales (semitone offsets from root)
+const SCALES = {
+  minor:         [0, 2, 3, 5, 7, 8, 10],
+  dorian:        [0, 2, 3, 5, 7, 9, 10],
+  phrygian:      [0, 1, 3, 5, 7, 8, 10],
+  pentaMinor:    [0, 3, 5, 7, 10],
+  pentaMajor:    [0, 2, 4, 7, 9],
+  wholeTone:     [0, 2, 4, 6, 8, 10],
+  harmonicMinor: [0, 2, 3, 5, 7, 8, 11],
+  lydian:        [0, 2, 4, 6, 7, 9, 11],
+};
+
+// Current settings
+const settings = {
+  basePitch: 55,      // Hz (A1)
+  detuneCents: 7,
+  oscCount: 5,
+  waveform: 'sine',
+  filterRate: 0.05,
+  filterDepth: 0.60,
+  pitchDrift: 0.15,
+  volLfoDepth: 0.30,
+  reverbAmount: 0.70,
+  delayAmount: 0.40,
+  delayTime: 0.8,
+  masterVolume: 0.50,
+  scale: 'minor',
+  genSpeed: 8,        // seconds between new notes
+  maxVoices: 6,
+};
+
+// Prime numbers for incommensurable timing (Eno's technique)
+// Using primes ensures loops never sync back up
+const PRIMES = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53];
+
+// ─── INIT ───────────────────────────────────────────────────────
+
+function initAudio() {
+  if (audioCtx) return;
+  
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  
+  // Master chain: voices → dryGain + reverbWet + delayWet → masterGain → analyser → destination
+  
+  // Master gain
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = settings.masterVolume;
+  
+  // Dry path
+  dryGain = audioCtx.createGain();
+  dryGain.gain.value = 1.0 - settings.reverbAmount * 0.5;
+  
+  // Reverb (procedurally generated impulse response)
+  reverbNode = createReverb(3.5);
+  reverbWet = audioCtx.createGain();
+  reverbWet.gain.value = settings.reverbAmount;
+  
+  // Delay with feedback
+  delayNode = audioCtx.createDelay(5.0);
+  delayNode.delayTime.value = settings.delayTime;
+  delayFeedback = audioCtx.createGain();
+  delayFeedback.gain.value = 0.45;
+  delayWet = audioCtx.createGain();
+  delayWet.gain.value = settings.delayAmount;
+  
+  // Connect delay feedback loop
+  delayNode.connect(delayFeedback);
+  delayFeedback.connect(delayNode);
+  
+  // Analyser for visualizer
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 512;
+  analyser.smoothingTimeConstant = 0.85;
+  
+  // Connect: dry + reverb + delay → masterGain → analyser → speakers
+  dryGain.connect(masterGain);
+  reverbNode.connect(reverbWet);
+  reverbWet.connect(masterGain);
+  delayNode.connect(delayWet);
+  delayWet.connect(masterGain);
+  // Also feed delay into reverb for extra space
+  delayWet.connect(reverbNode);
+  
+  masterGain.connect(analyser);
+  analyser.connect(audioCtx.destination);
+}
+
+// ─── PROCEDURAL REVERB ───────────────────────────────────────────
+// Generates an impulse response from white noise with exponential decay
+// No audio files needed — everything is synthesized
+
+function createReverb(duration = 3) {
+  const convolver = audioCtx.createConvolver();
+  const rate = audioCtx.sampleRate;
+  const length = Math.floor(rate * duration);
+  const impulse = audioCtx.createBuffer(2, length, rate);
+  
+  for (let ch = 0; ch < 2; ch++) {
+    const data = impulse.getChannelData(ch);
+    for (let i = 0; i < length; i++) {
+      const t = i / length;
+      // Exponential decay with a slight initial build for natural attack
+      const decay = Math.pow(1 - t, 2.5);
+      const build = i < rate * 0.005 ? (i / (rate * 0.005)) : 1;
+      // Mix white noise with a low-frequency component for warmth
+      const noise = (Math.random() * 2 - 1);
+      data[i] = noise * decay * build * 0.5;
+    }
+  }
+  
+  convolver.buffer = impulse;
+  return convolver;
+}
+
+// ─── VOICE CREATION ──────────────────────────────────────────────
+// Each voice = multiple detuned oscillators → filter → gain envelope → output
+// The oscillators are slightly detuned from each other for a "fat" analog drone
+// Slow LFOs modulate the filter and pitch for continuous evolution
+
+function createVoice(frequency, noteName) {
+  const id = ++voiceIdCounter;
+  const now = audioCtx.currentTime;
+  
+  // Voice gain (envelope controlled)
+  const voiceGain = audioCtx.createGain();
+  voiceGain.gain.value = 0;
+  
+  // Lowpass filter with resonance
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 800;
+  filter.Q.value = 2;
+  
+  // Create multiple detuned oscillators
+  const oscillators = [];
+  const detuneSpread = settings.detuneCents;
+  const oscCount = settings.oscCount;
+  
+  for (let i = 0; i < oscCount; i++) {
+    const osc = audioCtx.createOscillator();
+    osc.type = settings.waveform;
+    osc.frequency.value = frequency;
+    
+    // Spread detune symmetrically around center
+    const detuneAmount = oscCount > 1
+      ? (i / (oscCount - 1) - 0.5) * 2 * detuneSpread
+      : 0;
+    osc.detune.value = detuneAmount;
+    
+    // Individual gain for mixing (slightly randomized for organic feel)
+    const oscGain = audioCtx.createGain();
+    oscGain.gain.value = 0.8 + Math.random() * 0.4;
+    
+    osc.connect(oscGain);
+    oscGain.connect(filter);
+    osc.start();
+    
+    oscillators.push({ osc, gain: oscGain });
+  }
+  
+  // ── Slow LFO for filter sweep ──
+  // Uses incommensurable timing (prime-based) so it never syncs with other voices
+  const filterLfo = audioCtx.createOscillator();
+  const filterLfoPrime = PRIMES[Math.floor(Math.random() * PRIMES.length)];
+  filterLfo.frequency.value = settings.filterRate * (filterLfoPrime / 10);
+  const filterLfoGain = audioCtx.createGain();
+  filterLfoGain.gain.value = settings.filterDepth * 3000;
+  filterLfo.connect(filterLfoGain);
+  filterLfoGain.connect(filter.frequency);
+  filterLfo.start();
+  
+  // ── Very slow LFO for pitch drift ──
+  const pitchLfo = audioCtx.createOscillator();
+  const pitchLfoPrime = PRIMES[Math.floor(Math.random() * PRIMES.length)];
+  pitchLfo.frequency.value = (settings.filterRate * 0.3) * (pitchLfoPrime / 10);
+  const pitchLfoGain = audioCtx.createGain();
+  pitchLfoGain.gain.value = settings.pitchDrift * 50; // cents
+  pitchLfo.connect(pitchLfoGain);
+  oscillators.forEach(({ osc }) => {
+    pitchLfoGain.connect(osc.detune);
+  });
+  pitchLfo.start();
+  
+  // ── Slow LFO for volume swell ──
+  const volLfo = audioCtx.createOscillator();
+  const volLfoPrime = PRIMES[Math.floor(Math.random() * PRIMES.length)];
+  volLfo.frequency.value = (settings.filterRate * 0.5) * (volLfoPrime / 10);
+  const volLfoGain = audioCtx.createGain();
+  volLfoGain.gain.value = settings.volLfoDepth * 0.3;
+  volLfo.connect(volLfoGain);
+  volLfoGain.connect(voiceGain.gain);
+  volLfo.start();
+  
+  // Connect filter → voice gain → outputs
+  filter.connect(voiceGain);
+  voiceGain.connect(dryGain);
+  voiceGain.connect(reverbNode);
+  voiceGain.connect(delayNode);
+  
+  // ── Envelope: long attack, long release (drone style) ──
+  const attackTime = 3 + Math.random() * 5;   // 3-8s attack
+  const releaseTime = 6 + Math.random() * 8;   // 6-14s release
+  const sustainLevel = 0.15 + Math.random() * 0.1;
+  const noteDuration = 20 + Math.random() * 30; // 20-50s total
+  
+  // Attack
+  voiceGain.gain.setValueAtTime(0, now);
+  voiceGain.gain.linearRampToValueAtTime(sustainLevel, now + attackTime);
+  
+  // Schedule release
+  const releaseStart = now + noteDuration;
+  voiceGain.gain.setValueAtTime(sustainLevel, releaseStart);
+  voiceGain.gain.linearRampToValueAtTime(0, releaseStart + releaseTime);
+  
+  // Store voice for cleanup
+  const voice = {
+    id,
+    noteName,
+    oscillators,
+    filter,
+    voiceGain,
+    filterLfo,
+    pitchLfo,
+    volLfo,
+    filterLfoGain,
+    pitchLfoGain,
+    volLfoGain,
+    startTime: now,
+    endTime: releaseStart + releaseTime,
+  };
+  
+  activeVoices.set(id, voice);
+  
+  // Schedule cleanup after note ends
+  setTimeout(() => {
+    stopVoice(id);
+  }, (noteDuration + releaseTime + 1) * 1000);
+  
+  updateVoiceDisplay();
+  return voice;
+}
+
+function stopVoice(id) {
+  const voice = activeVoices.get(id);
+  if (!voice) return;
+  
+  const now = audioCtx.currentTime;
+  
+  // Quick fade out
+  voice.voiceGain.gain.cancelScheduledValues(now);
+  voice.voiceGain.gain.setValueAtTime(voice.voiceGain.gain.value, now);
+  voice.voiceGain.gain.linearRampToValueAtTime(0, now + 0.5);
+  
+  // Stop oscillators after fade
+  setTimeout(() => {
+    voice.oscillators.forEach(({ osc }) => {
+      try { osc.stop(); } catch(e) {}
+    });
+    try { voice.filterLfo.stop(); } catch(e) {}
+    try { voice.pitchLfo.stop(); } catch(e) {}
+    try { voice.volLfo.stop(); } catch(e) {}
+  }, 600);
+  
+  activeVoices.delete(id);
+  updateVoiceDisplay();
+}
+
+function stopAllVoices() {
+  activeVoices.forEach((_, id) => stopVoice(id));
+}
+
+// ─── GENERATIVE SCHEDULER ─────────────────────────────────────────
+// Picks notes from the current scale at incommensurable intervals
+// Uses prime-number-based timing so the pattern never repeats exactly
+// (Brian Eno's technique from "Music for Airports")
+
+let schedulerTimer = null;
+let generationSeed = Math.floor(Math.random() * 100000);
+
+function getNoteFrequency(scaleIndex, octave) {
+  const scale = SCALES[settings.scale];
+  const semitones = scale[scaleIndex % scale.length] + (Math.floor(scaleIndex / scale.length) * 12);
+  const octaveShift = (octave - 1) * 12;
+  return settings.basePitch * Math.pow(2, (semitones + octaveShift) / 12);
+}
+
+function noteNameFor(scaleIndex, octave) {
+  const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const scale = SCALES[settings.scale];
+  const semitones = scale[scaleIndex % scale.length] + (Math.floor(scaleIndex / scale.length) * 12);
+  const totalSemis = Math.round(12 * Math.log2(settings.basePitch / 16.351)) + semitones + (octave - 1) * 12;
+  const name = names[totalSemis % 12];
+  const octaveNum = Math.floor(totalSemis / 12);
+  return `${name}${octaveNum}`;
+}
+
+function generateNote() {
+  if (isPaused || !isRunning) return;
+  
+  // If at max voices, skip (let existing voices evolve)
+  if (activeVoices.size >= settings.maxVoices) {
+    scheduleNext();
+    return;
+  }
+  
+  const scale = SCALES[settings.scale];
+  
+  // Pseudo-random note selection influenced by seed
+  // Lower notes more likely (drones prefer low register)
+  const rand = Math.random();
+  const scaleIndex = Math.floor(Math.pow(rand, 1.8) * scale.length * 2); // bias toward lower notes
+  const octave = rand < 0.4 ? 1 : (rand < 0.75 ? 2 : 3); // mostly octave 1 and 2
+  
+  const freq = getNoteFrequency(scaleIndex, octave);
+  const nName = noteNameFor(scaleIndex, octave);
+  
+  createVoice(freq, nName);
+  
+  scheduleNext();
+}
+
+function scheduleNext() {
+  if (schedulerTimer) clearTimeout(schedulerTimer);
+  
+  // Incommensurable timing: multiply base speed by a prime ratio
+  // This ensures the generation pattern never repeats exactly
+  const primeIdx = Math.floor(Math.random() * 6);
+  const primeMultiplier = 0.7 + (PRIMES[primeIdx] / PRIMES[6]) * 0.6; // ~0.7 to ~1.3
+  const interval = settings.genSpeed * primeMultiplier * 1000;
+  
+  schedulerTimer = setTimeout(generateNote, interval);
+}
+
+// ─── VISUALIZER ───────────────────────────────────────────────────
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let canvasW, canvasH;
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * window.devicePixelRatio;
+  canvas.height = rect.height * window.devicePixelRatio;
+  canvasW = canvas.width;
+  canvasH = canvas.height;
+}
+
+window.addEventListener('resize', resizeCanvas);
+
+function drawVisualizer() {
+  if (!analyser) {
+    requestAnimationFrame(drawVisualizer);
+    return;
+  }
+  
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+  analyser.getByteFrequencyData(dataArray);
+  
+  // Clear with fade trail effect
+  ctx.fillStyle = 'rgba(10, 10, 15, 0.15)';
+  ctx.fillRect(0, 0, canvasW, canvasH);
+  
+  // Draw frequency bars
+  const barCount = 64;
+  const barWidth = canvasW / barCount;
+  
+  for (let i = 0; i < barCount; i++) {
+    const dataIdx = Math.floor(i * bufferLength / barCount);
+    const value = dataArray[dataIdx] / 255;
+    const barHeight = value * canvasH * 0.8;
+    
+    // Gradient from accent to warm based on frequency
+    const hue = i / barCount;
+    let r, g, b;
+    if (hue < 0.5) {
+      // Purple to blue
+      r = 108 + (50 - 108) * (hue * 2);
+      g = 92 + (80 - 92) * (hue * 2);
+      b = 231 + (231 - 231) * (hue * 2);
+    } else {
+      // Blue to warm
+      r = 50 + (225 - 50) * ((hue - 0.5) * 2);
+      g = 80 + (112 - 80) * ((hue - 0.5) * 2);
+      b = 231 + (85 - 231) * ((hue - 0.5) * 2);
+    }
+    
+    const alpha = 0.3 + value * 0.7;
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    ctx.fillRect(i * barWidth, canvasH - barHeight, barWidth - 2, barHeight);
+    
+    // Glow on tall bars
+    if (value > 0.5) {
+      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.15)`;
+      ctx.fillRect(i * barWidth, 0, barWidth - 2, canvasH);
+    }
+  }
+  
+  requestAnimationFrame(drawVisualizer);
+}
+
+// ─── UI WIRING ────────────────────────────────────────────────────
+
+function updateVoiceDisplay() {
+  document.getElementById('voiceCount').textContent = activeVoices.size;
+  
+  // Show active notes
+  const noteDisplay = document.getElementById('noteDisplay');
+  const notes = Array.from(activeVoices.values()).map(v => 
+    `<span class="note-display active">${v.noteName}</span>`
+  );
+  noteDisplay.innerHTML = notes.join('') || '<span style="color:var(--text-dim)">—</span>';
+}
+
+// Sliders
+function wireSlider(id, valueId, suffix, callback) {
+  const slider = document.getElementById(id);
+  const display = document.getElementById(valueId);
+  
+  slider.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    display.textContent = suffix(val);
+    callback(val);
+  });
+}
+
+wireSlider('pitch', 'pitchVal', v => `${v} Hz`, v => {
+  settings.basePitch = v;
+});
+
+wireSlider('detune', 'detuneVal', v => `${v} cents`, v => {
+  settings.detuneCents = v;
+});
+
+wireSlider('oscCount', 'oscCountVal', v => `${v}`, v => {
+  settings.oscCount = v;
+});
+
+wireSlider('filterRate', 'filterRateVal', v => `${v.toFixed(3)} Hz`, v => {
+  settings.filterRate = v;
+});
+
+wireSlider('filterDepth', 'filterDepthVal', v => `${v}%`, v => {
+  settings.filterDepth = v / 100;
+});
+
+wireSlider('pitchDrift', 'pitchDriftVal', v => `${v}%`, v => {
+  settings.pitchDrift = v / 100;
+});
+
+wireSlider('volLfo', 'volLfoVal', v => `${v}%`, v => {
+  settings.volLfoDepth = v / 100;
+});
+
+wireSlider('reverb', 'reverbVal', v => `${v}%`, v => {
+  settings.reverbAmount = v / 100;
+  if (reverbWet) reverbWet.gain.setTargetAtTime(v / 100, audioCtx.currentTime, 0.1);
+  if (dryGain) dryGain.gain.setTargetAtTime(1.0 - (v / 100) * 0.5, audioCtx.currentTime, 0.1);
+});
+
+wireSlider('delay', 'delayVal', v => `${v}%`, v => {
+  settings.delayAmount = v / 100;
+  if (delayWet) delayWet.gain.setTargetAtTime(v / 100, audioCtx.currentTime, 0.1);
+});
+
+wireSlider('delayTime', 'delayTimeVal', v => `${v.toFixed(1)} s`, v => {
+  settings.delayTime = v;
+  if (delayNode) delayNode.delayTime.setTargetAtTime(v, audioCtx.currentTime, 0.1);
+});
+
+wireSlider('master', 'masterVal', v => `${v}%`, v => {
+  settings.masterVolume = v / 100;
+  if (masterGain) masterGain.gain.setTargetAtTime(v / 100, audioCtx.currentTime, 0.05);
+});
+
+wireSlider('genSpeed', 'genSpeedVal', v => `${v} s`, v => {
+  settings.genSpeed = v;
+});
+
+wireSlider('maxVoices', 'maxVoicesVal', v => `${v}`, v => {
+  settings.maxVoices = v;
+});
+
+// Waveform buttons
+document.querySelectorAll('#waveformBtns .btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#waveformBtns .btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    settings.waveform = btn.dataset.wave;
+  });
+});
+
+// Scale buttons
+document.querySelectorAll('.scale-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.scale-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    settings.scale = btn.dataset.scale;
+  });
+});
+
+// Pause button
+document.getElementById('pauseBtn').addEventListener('click', () => {
+  isPaused = !isPaused;
+  const btn = document.getElementById('pauseBtn');
+  btn.textContent = isPaused ? 'Resume' : 'Pause';
+  btn.classList.toggle('active', isPaused);
+});
+
+// New seed button
+document.getElementById('newSeedBtn').addEventListener('click', () => {
+  generationSeed = Math.floor(Math.random() * 100000);
+  // Trigger an immediate note
+  if (isRunning && !isPaused && activeVoices.size < settings.maxVoices) {
+    generateNote();
+  }
+});
+
+// Stop all button
+document.getElementById('stopBtn').addEventListener('click', () => {
+  stopAllVoices();
+});
+
+// ─── START ────────────────────────────────────────────────────────
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('startBtn').textContent = 'Loading...';
+  
+  initAudio();
+  resizeCanvas();
+  drawVisualizer();
+  
+  isRunning = true;
+  
+  // Start generating
+  setTimeout(() => {
+    generateNote();
+    // Generate a second voice shortly after for immediate richness
+    setTimeout(() => generateNote(), 2000);
+  }, 500);
+  
+  // Switch to interface
+  setTimeout(() => {
+    document.getElementById('startScreen').style.display = 'none';
+    document.getElementById('interface').style.display = 'flex';
+  }, 100);
+});
+
+</script>
+</body>
+</html>
