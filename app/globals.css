@@ -192,3 +192,28 @@ button:focus-visible,input:focus-visible,select:focus-visible { outline:2px soli
 @media (prefers-reduced-motion:reduce) {
   *,*::before,*::after { scroll-behavior:auto!important; animation-duration:.001ms!important; animation-iteration-count:1!important; transition-duration:.001ms!important; }
 }
+
+/* Deep-space skin: lunar material, distant stars, and restrained orbital light. */
+:root { --space-black:#04060b; --space-blue:#79a9ff; --space-violet:#a593ff; --star-white:#f4f7ff; --bg:var(--space-black); }
+html { background:#03050a; }
+body { position:relative; isolation:isolate; min-height:100vh; overflow-x:hidden; background:radial-gradient(ellipse at 50% -10%,rgba(36,48,88,.42),transparent 44rem),radial-gradient(circle at 8% 36%,rgba(116,73,160,.18),transparent 29rem),radial-gradient(circle at 92% 72%,rgba(40,104,136,.14),transparent 32rem),linear-gradient(180deg,#060910,#03050a 68%,#07100f); }
+body::before { content:''; position:fixed; inset:-12%; z-index:-2; pointer-events:none; opacity:.72; background-image:radial-gradient(circle,#fff 0 1px,transparent 1.35px),radial-gradient(circle,rgba(163,197,255,.9) 0 1px,transparent 1.5px),radial-gradient(circle,rgba(230,213,255,.72) 0 .7px,transparent 1.2px); background-position:0 0,36px 62px,91px 19px; background-size:137px 137px,211px 211px,83px 83px; filter:drop-shadow(0 0 3px rgba(150,190,255,.42)); animation:starDrift 90s linear infinite; }
+body::after { content:''; position:fixed; inset:-18%; z-index:-1; pointer-events:none; opacity:.62; background:radial-gradient(ellipse at 23% 32%,rgba(125,99,205,.17),transparent 25%),radial-gradient(ellipse at 75% 61%,rgba(57,142,177,.14),transparent 24%),conic-gradient(from 218deg at 48% 48%,transparent,rgba(145,120,210,.045),transparent 36%); filter:blur(18px); }
+.instrument-shell { position:relative; z-index:0; }
+.topbar { border-color:rgba(121,169,255,.26); background-image:linear-gradient(180deg,rgba(18,23,33,.96),rgba(7,11,17,.94)),url('/moon-02-regolith.jpg'); background-size:auto,420px 420px; background-blend-mode:normal,soft-light; }
+.cosmos-readout { display:flex; min-width:200px; flex-direction:column; align-items:center; gap:5px; padding:7px 18px; border-right:1px solid rgba(121,169,255,.12); border-left:1px solid rgba(121,169,255,.12); text-align:center; }
+.cosmos-readout span { display:flex; align-items:center; gap:7px; color:#8191a9; font-size:7px; letter-spacing:.2em; }.cosmos-readout i { width:5px; height:5px; border-radius:50%; background:var(--space-blue); box-shadow:0 0 9px var(--space-blue),18px -2px 0 -1px var(--star-white),-16px 4px 0 -1px var(--space-violet); }.cosmos-readout strong { color:#cad8ef; font-size:8px; font-weight:400; letter-spacing:.13em; }
+.brand-mark { border-color:rgba(121,169,255,.72); background:radial-gradient(circle at 39% 34%,rgba(240,245,255,.78),rgba(143,145,170,.38) 18%,rgba(47,51,72,.86) 47%,rgba(9,12,19,.96) 70%); box-shadow:0 0 28px rgba(121,169,255,.18),inset -7px -6px 12px rgba(0,0,0,.56); }
+.brand-mark::before { border-color:rgba(185,163,255,.6); border-radius:50%; transform:rotate(-22deg) scaleY(.34); box-shadow:0 0 7px rgba(185,163,255,.26); }
+.global-rack,.preset-rack { border-color:rgba(121,169,255,.18); background-image:linear-gradient(180deg,rgba(18,23,29,.9),rgba(7,11,15,.94)),url('/moon-02-regolith.jpg'); background-size:auto,360px 360px; background-blend-mode:normal,soft-light; }
+.knob-body { border-color:rgba(210,221,239,.25); background-image:radial-gradient(circle at 36% 28%,rgba(166,177,181,.5) 0 8%,rgba(44,50,54,.65) 28%,rgba(12,16,20,.86) 67%,#05070a 69%),url('/moon-02-regolith.jpg'); background-size:auto,160px 160px; background-position:center; background-blend-mode:normal,overlay; box-shadow:0 7px 13px rgba(0,0,0,.7),inset 0 1px 3px rgba(224,235,255,.2),0 0 0 4px rgba(0,0,0,.25),0 0 18px rgba(121,169,255,.04); }
+.knob-body::before { border-color:rgba(121,169,255,.16); background:repeating-conic-gradient(from -138deg,rgba(185,202,232,.5) 0 1deg,transparent 1deg 13.5deg); }
+.working-surface { border-color:rgba(121,169,255,.28); background-image:linear-gradient(145deg,rgba(20,25,34,.94),rgba(5,8,13,.97) 34%,rgba(19,15,27,.94)),url('/moon-02-regolith.jpg'); background-size:auto,560px 560px; background-blend-mode:normal,soft-light; box-shadow:inset 0 1px 0 rgba(227,237,255,.09),inset 0 0 90px rgba(0,0,0,.45),0 32px 80px rgba(0,0,0,.52),0 0 70px rgba(87,112,196,.08); }
+.console-panel { border-color:rgba(144,167,204,.18); background-image:linear-gradient(150deg,rgba(11,17,24,.93),rgba(5,9,13,.96)),url('/moon-02-regolith.jpg'); background-size:auto,300px 300px; background-blend-mode:normal,soft-light; }
+.console-panel.is-focused { border-color:rgba(121,169,255,.4); box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 0 0 1px rgba(121,169,255,.08),0 0 28px rgba(121,169,255,.06),0 9px 24px rgba(0,0,0,.35); }
+.module-rail { border-bottom-color:rgba(121,169,255,.12); }.module-rail > span { color:#667c9d; }.module-rail > strong { color:#d0ddf1; }.module-rail > small { color:#6f8098; }.module-rail > button { border-color:rgba(121,169,255,.24); color:#99b5e7; background:rgba(79,119,184,.06); }
+.module-rail > button:hover { color:#07101d; background:var(--space-blue); }
+.topbar,.global-rack,.preset-rack,.working-surface,.telemetry-rack,.timeline-rack,.capture-rack { backdrop-filter:blur(18px) saturate(1.08); }
+.capture-status small a { margin-left:5px; color:#859fc5; text-decoration:none; white-space:nowrap; }.capture-status small a:hover { color:var(--star-white); text-decoration:underline; }
+@keyframes starDrift { from { transform:translate3d(0,0,0) rotate(0deg); } to { transform:translate3d(-38px,56px,0) rotate(.4deg); } }
+@media (max-width:1000px) { .cosmos-readout { display:none; } }
