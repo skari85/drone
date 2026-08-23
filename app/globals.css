@@ -217,3 +217,23 @@ body::after { content:''; position:fixed; inset:-18%; z-index:-1; pointer-events
 .capture-status small a { margin-left:5px; color:#859fc5; text-decoration:none; white-space:nowrap; }.capture-status small a:hover { color:var(--star-white); text-decoration:underline; }
 @keyframes starDrift { from { transform:translate3d(0,0,0) rotate(0deg); } to { transform:translate3d(-38px,56px,0) rotate(.4deg); } }
 @media (max-width:1000px) { .cosmos-readout { display:none; } }
+
+/* Ambient machine motion: slow enough to read as electricity, not distraction. */
+.working-surface { overflow:hidden; }
+.working-surface::before { content:''; position:absolute; inset:-45% -25%; z-index:0; pointer-events:none; opacity:.16; background:linear-gradient(112deg,transparent 38%,rgba(121,169,255,.13) 46%,rgba(185,163,255,.18) 50%,rgba(121,169,255,.08) 54%,transparent 62%); transform:translateX(-42%) rotate(2deg); animation:deckSweep 19s ease-in-out infinite; }
+.console-panel { z-index:1; }
+.module-rail { position:relative; overflow:hidden; }
+.module-rail::after { content:''; position:absolute; right:0; bottom:-1px; width:24%; height:1px; pointer-events:none; opacity:0; background:linear-gradient(90deg,transparent,var(--space-blue),var(--star-white),transparent); filter:drop-shadow(0 0 4px var(--space-blue)); animation:railSignal 8s linear infinite; }
+.console-panel:nth-child(2) .module-rail::after { animation-delay:-1.6s; }.console-panel:nth-child(3) .module-rail::after { animation-delay:-3.2s; }.console-panel:nth-child(4) .module-rail::after { animation-delay:-4.8s; }.console-panel:nth-child(5) .module-rail::after { animation-delay:-6.4s; }
+.knob-body::after { content:''; position:absolute; inset:-2px; z-index:0; pointer-events:none; border-radius:50%; opacity:.26; background:conic-gradient(from 0deg,transparent 0 72%,rgba(121,169,255,.8) 82%,transparent 91%); mask:radial-gradient(circle,transparent 0 68%,#000 71%); animation:knobOrbit 11s linear infinite; }
+.macro-knob:nth-child(2) .knob-body::after { animation-delay:-2.2s; }.macro-knob:nth-child(3) .knob-body::after { animation-delay:-4.4s; }.macro-knob:nth-child(4) .knob-body::after { animation-delay:-6.6s; }.macro-knob:nth-child(5) .knob-body::after { animation-delay:-8.8s; }
+.cosmos-readout i { animation:signalTwinkle 4.8s ease-in-out infinite; }
+.telemetry-rack .meter { position:relative; }
+.telemetry-rack .meter::after { content:''; position:absolute; inset:0; pointer-events:none; background:linear-gradient(90deg,transparent 0 35%,rgba(244,247,255,.55) 50%,transparent 65%); transform:translateX(-100%); animation:meterShimmer 6.5s ease-in-out infinite; }
+.capture-rack:not(.is-recording) .capture-light { animation:statusBreathe 4.2s ease-in-out infinite; }
+@keyframes deckSweep { 0%,20% { transform:translateX(-48%) rotate(2deg); opacity:0; } 48% { opacity:.16; } 72%,100% { transform:translateX(48%) rotate(2deg); opacity:0; } }
+@keyframes railSignal { 0%,58% { transform:translateX(-380%); opacity:0; } 66% { opacity:.72; } 84% { opacity:.3; } 100% { transform:translateX(430%); opacity:0; } }
+@keyframes knobOrbit { to { transform:rotate(360deg); } }
+@keyframes signalTwinkle { 0%,100% { opacity:.55; transform:scale(.82); } 48% { opacity:1; transform:scale(1.2); } }
+@keyframes meterShimmer { 0%,62% { transform:translateX(-120%); opacity:0; } 72% { opacity:.8; } 92%,100% { transform:translateX(120%); opacity:0; } }
+@keyframes statusBreathe { 0%,100% { opacity:.55; box-shadow:0 0 0 4px rgba(167,230,177,.06); } 50% { opacity:1; box-shadow:0 0 13px rgba(167,230,177,.62),0 0 0 4px rgba(167,230,177,.1); } }
