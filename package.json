@@ -11,8 +11,8 @@
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:dev": "CARGO_TARGET_DIR=\"$HOME/.cargo-target/hi-drone\" tauri dev",
+    "tauri:build": "CARGO_TARGET_DIR=\"$HOME/.cargo-target/hi-drone\" tauri build"
   },
   "dependencies": {
     "lamejs": "^1.2.1",

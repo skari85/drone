@@ -24,6 +24,51 @@ much simpler than the current `app/page.tsx` (no sub/air oscillators, no
 chorus/drive/noise, no Audio Input, no recording). Don't treat it as a
 reference for the current engine; nobody has cleaned it up yet (see TODO).
 
+There is also now a **Tauri desktop build** (`src-tauri/`, `tauri-src/`,
+`vite.tauri.config.ts`) for a standalone macOS/Windows/Linux app, aimed at
+one-time-payment distribution (Lemon Squeezy, not yet wired up). See
+"Tauri desktop app" below before touching any of that.
+
+## Tauri desktop app
+
+`tauri-src/main.tsx` mounts the exact same `app/page.tsx` component used by
+the web version into a plain static Vite bundle — no vinext/Next SSR
+involved, since the engine is 100% client-side already. `vite.tauri.config.ts`
+builds that to `dist-tauri/` (gitignored), which `src-tauri/tauri.conf.json`
+points Tauri's webview at. **Don't fork the audio engine for desktop** — if
+it needs to diverge from the web version, that's a discussion, not a given.
+
+`src-tauri/Info.plist` adds `NSMicrophoneUsageDescription` so the mic
+recording feature's permission prompt actually shows on macOS instead of
+silently failing.
+
+Build with `npm run tauri:build` (produces a `.app` and a `.dmg` under
+`~/.cargo-target/hi-drone/release/bundle/`) or `npm run tauri:dev` for a
+live dev window. **Do not run plain `tauri build`/`cargo tauri build`** —
+use the npm scripts, which set `CARGO_TARGET_DIR` to a path outside the
+repo. Reason: this repo lives on `/Volumes/lacie`, an exFAT external drive
+(confirmed via `mount`), and exFAT can't hold macOS resource forks, so the
+cross-OS bridge this project has been developed through leaves a `._*`
+AppleDouble shadow file next to almost everything. Cargo's build script
+tried to read one of those as if it were the real file (`stream did not
+contain valid UTF-8`) and hard-failed — moving `target/` off the exFAT
+volume fixed the build-output half of that, but source-tree shadow files
+(e.g. `src-tauri/capabilities/._default.json`) can still trip up Tauri's
+own build.rs since it reads straight from the repo. If a build fails with
+that exact "stream did not contain valid UTF-8" error again, the fix is:
+```
+find . -path ./.git -prune -o -name "._*" -type f -print0 | xargs -0 rm -f
+```
+run from the repo root, then rebuild. This is a standing hazard of working
+on this volume, not a one-time fluke — expect to hit it again.
+
+The built app is currently **unsigned and not notarized** — fine for
+testing on this Mac, but a fresh Gatekeeper-protected Mac will refuse to
+open it normally (right-click → Open works around it once). Before selling
+this via Lemon Squeezy, it needs an Apple Developer Program enrollment plus
+codesigning + notarization, or paying customers will hit a scary "Apple
+cannot check it for malicious software" wall on first launch.
+
 ## Audio architecture (app/page.tsx)
 
 Everything routes through one graph built once in `ensureAudio()`:
