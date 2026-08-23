@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 type Surface = 'sound' | 'sequence' | 'licks' | 'behaviour' | 'patch';
 type CellMode = 'pulse' | 'gate' | 'random' | 'delay' | 'repeater';
 type EventKind = 'voice' | 'pulse' | 'sequence' | 'gesture' | 'patch' | 'scene';
+type DroneScaleName = 'minor' | 'dorian' | 'phrygian' | 'pentaMinor' | 'pentaMajor' | 'wholeTone' | 'harmonicMinor' | 'lydian';
 type ScaleName = 'minor' | 'dorian' | 'major' | 'pentatonic' | 'phrygian';
 
 type Voice = { id: number; name: string; base: number; tone: string; role: string };
@@ -20,7 +21,9 @@ type PerfEvent = { at: number; label: string; kind: EventKind };
 type JazzLick = { name: string; idea: string; colour: string; phrase: string };
 type Organism = { phase: number; energy: number; breath: number; coherence: number; signal: string };
 type VoiceNode = { carrier: OscillatorNode; shadow: OscillatorNode; mod: GainNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode };
-type Graph = { context: AudioContext; master: GainNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode; capture: MediaStreamAudioDestinationNode; voices: Map<number, VoiceNode> };
+type DroneVoiceNode = { noteName: string; oscillators: Array<{ osc: OscillatorNode; gain: GainNode }>; voiceGain: GainNode; filter: BiquadFilterNode; filterLfo: OscillatorNode; filterLfoGain: GainNode; pitchLfo: OscillatorNode; pitchLfoGain: GainNode; volLfo: OscillatorNode; volLfoGain: GainNode };
+type DroneSettings = { basePitch: number; detuneCents: number; oscCount: number; waveform: OscillatorType; filterRate: number; filterDepth: number; pitchDrift: number; volLfoDepth: number; reverbAmount: number; delayAmount: number; delayTime: number; masterVolume: number; scale: DroneScaleName; genSpeed: number; maxVoices: number };
+type Graph = { context: AudioContext; master: GainNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode; capture: MediaStreamAudioDestinationNode; voices: Map<number, VoiceNode>; droneMaster: GainNode; droneDry: GainNode; droneReverb: ConvolverNode; droneReverbWet: GainNode; droneDelay: DelayNode; droneDelayFeedback: GainNode; droneDelayWet: GainNode; droneVoices: Map<number, DroneVoiceNode> };
 
 const voices: Voice[] = [
   { id: 0, name: 'Moss', base: 65, tone: 'moss', role: 'low bloom' },
@@ -56,6 +59,22 @@ const initialPatches: Patch[] = [
 const defaultMacros = { tension: 34, movement: 38, density: 45, space: 46, damage: 22 };
 type Macros = typeof defaultMacros;
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const createDroneReverb = (context: AudioContext, duration = 3.5) => {
+  const convolver = context.createConvolver();
+  const length = Math.floor(context.sampleRate * duration);
+  const impulse = context.createBuffer(2, length, context.sampleRate);
+  for (let channel = 0; channel < 2; channel += 1) {
+    const data = impulse.getChannelData(channel);
+    for (let index = 0; index < length; index += 1) {
+      const progress = index / length;
+      const decay = Math.pow(1 - progress, 2.5);
+      const build = index < context.sampleRate * 0.005 ? index / (context.sampleRate * 0.005) : 1;
+      data[index] = (Math.random() * 2 - 1) * decay * build * 0.5;
+    }
+  }
+  convolver.buffer = impulse;
+  return convolver;
+};
 
 const rootNames = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
 const scales: Record<ScaleName, { label: string; intervals: number[] }> = {
@@ -64,6 +83,22 @@ const scales: Record<ScaleName, { label: string; intervals: number[] }> = {
   major: { label: 'Major', intervals: [0, 2, 4, 5, 7, 9, 11] },
   pentatonic: { label: 'Minor pentatonic', intervals: [0, 3, 5, 7, 10] },
   phrygian: { label: 'Phrygian', intervals: [0, 1, 3, 5, 7, 8, 10] },
+};
+const droneScales: Record<DroneScaleName, { label: string; intervals: number[] }> = {
+  minor: { label: 'D Minor', intervals: [0, 2, 3, 5, 7, 8, 10] },
+  dorian: { label: 'D Dorian', intervals: [0, 2, 3, 5, 7, 9, 10] },
+  phrygian: { label: 'E Phrygian', intervals: [0, 1, 3, 5, 7, 8, 10] },
+  pentaMinor: { label: 'Pentatonic Min', intervals: [0, 3, 5, 7, 10] },
+  pentaMajor: { label: 'Pentatonic Maj', intervals: [0, 2, 4, 7, 9] },
+  wholeTone: { label: 'Whole Tone', intervals: [0, 2, 4, 6, 8, 10] },
+  harmonicMinor: { label: 'Harmonic Minor', intervals: [0, 2, 3, 5, 7, 8, 11] },
+  lydian: { label: 'F Lydian', intervals: [0, 2, 4, 6, 7, 9, 11] },
+};
+const dronePrimes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53];
+const defaultDroneSettings: DroneSettings = {
+  basePitch: 55, detuneCents: 7, oscCount: 5, waveform: 'sine', filterRate: 0.05, filterDepth: 0.6,
+  pitchDrift: 0.15, volLfoDepth: 0.3, reverbAmount: 0.7, delayAmount: 0.4, delayTime: 0.8,
+  masterVolume: 0.5, scale: 'minor', genSpeed: 8, maxVoices: 6,
 };
 const sequenceTrackTemplates = [
   { id: 0, name: 'Root Path', voice: 0, colour: 'moss', octave: 0, range: 4, chance: 100, gate: 72 },
@@ -273,6 +308,12 @@ export default function Home() {
   const [take, setTake] = useState<Blob | null>(null);
   const [meter, setMeter] = useState(0);
   const [notice, setNotice] = useState('Touch POWER, then play a surface.');
+  const [droneSettings, setDroneSettings] = useState<DroneSettings>(defaultDroneSettings);
+  const [droneRunning, setDroneRunning] = useState(false);
+  const [dronePaused, setDronePaused] = useState(false);
+  const [droneVoiceCount, setDroneVoiceCount] = useState(0);
+  const [droneNotes, setDroneNotes] = useState<string[]>([]);
+  const [droneSeed, setDroneSeed] = useState(0);
 
   const graphRef = useRef<Graph | null>(null);
   const cellsRef = useRef(cells);
@@ -290,6 +331,13 @@ export default function Home() {
   const sequenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const captureStartedRef = useRef(0);
   const captureTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const droneSettingsRef = useRef(droneSettings);
+  const droneRunningRef = useRef(droneRunning);
+  const dronePausedRef = useRef(dronePaused);
+  const droneGenerationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const droneSeedRef = useRef(Math.floor(Math.random() * 100000));
+  const droneVoiceIdRef = useRef(0);
+  const droneCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const clockRef = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -304,6 +352,9 @@ export default function Home() {
   useEffect(() => { organismRef.current = organism; }, [organism]);
   useEffect(() => { organismLinkedRef.current = organismLinked; }, [organismLinked]);
   useEffect(() => { patchesRef.current = patches; }, [patches]);
+  useEffect(() => { droneSettingsRef.current = droneSettings; }, [droneSettings]);
+  useEffect(() => { droneRunningRef.current = droneRunning; }, [droneRunning]);
+  useEffect(() => { dronePausedRef.current = dronePaused; }, [dronePaused]);
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       try { setScenes(JSON.parse(localStorage.getItem('hi-drone-scenes') || '{}')); } catch { setScenes({}); }
@@ -326,18 +377,41 @@ export default function Home() {
     const compressor = context.createDynamicsCompressor();
     const analyser = context.createAnalyser();
     const capture = context.createMediaStreamDestination();
+    const droneMaster = context.createGain();
+    const droneDry = context.createGain();
+    const droneReverb = createDroneReverb(context);
+    const droneReverbWet = context.createGain();
+    const droneDelay = context.createDelay(5);
+    const droneDelayFeedback = context.createGain();
+    const droneDelayWet = context.createGain();
     master.gain.value = 0.48;
     compressor.threshold.value = -16;
     compressor.knee.value = 22;
     compressor.ratio.value = 8;
     compressor.attack.value = 0.012;
     compressor.release.value = 0.18;
-    analyser.fftSize = 128;
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.85;
+    droneDry.gain.value = 1 - defaultDroneSettings.reverbAmount * 0.5;
+    droneMaster.gain.value = defaultDroneSettings.masterVolume;
+    droneReverbWet.gain.value = defaultDroneSettings.reverbAmount;
+    droneDelay.delayTime.value = defaultDroneSettings.delayTime;
+    droneDelayFeedback.gain.value = 0.45;
+    droneDelayWet.gain.value = defaultDroneSettings.delayAmount;
+    droneDelay.connect(droneDelayFeedback);
+    droneDelayFeedback.connect(droneDelay);
     master.connect(compressor);
     compressor.connect(analyser);
     analyser.connect(context.destination);
     compressor.connect(capture);
-    graphRef.current = { context, master, compressor, analyser, capture, voices: new Map() };
+    droneDry.connect(droneMaster);
+    droneReverb.connect(droneReverbWet);
+    droneReverbWet.connect(droneMaster);
+    droneDelay.connect(droneDelayWet);
+    droneDelayWet.connect(droneMaster);
+    droneDelayWet.connect(droneReverb);
+    droneMaster.connect(master);
+    graphRef.current = { context, master, compressor, analyser, capture, voices: new Map(), droneMaster, droneDry, droneReverb, droneReverbWet, droneDelay, droneDelayFeedback, droneDelayWet, droneVoices: new Map() };
     await context.resume();
     return graphRef.current;
   }, []);
@@ -441,10 +515,154 @@ export default function Home() {
     addEvent(`${voice.name} ${midiToLabel(midi)}`, 'sequence');
   }, [addEvent, ensureAudio]);
 
+  const nextDroneRandom = useCallback(() => {
+    droneSeedRef.current = (droneSeedRef.current * 1664525 + 1013904223) >>> 0;
+    return droneSeedRef.current / 4294967296;
+  }, []);
+
+  const stopDroneVoice = useCallback((id: number) => {
+    const graph = graphRef.current;
+    const voice = graph?.droneVoices.get(id);
+    if (!graph || !voice) return;
+    const now = graph.context.currentTime;
+    voice.voiceGain.gain.cancelScheduledValues(now);
+    voice.voiceGain.gain.setTargetAtTime(0, now, 0.5);
+    window.setTimeout(() => {
+      voice.oscillators.forEach(({ osc }) => { try { osc.stop(); } catch {} });
+      try { voice.filterLfo.stop(); } catch {}
+      try { voice.pitchLfo.stop(); } catch {}
+      try { voice.volLfo.stop(); } catch {}
+    }, 650);
+    graph.droneVoices.delete(id);
+    setDroneVoiceCount(graph.droneVoices.size);
+    setDroneNotes(Array.from(graph.droneVoices.values()).map((item) => item.noteName));
+  }, []);
+
+  const stopAllDroneVoices = useCallback(() => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    Array.from(graph.droneVoices.keys()).forEach(stopDroneVoice);
+    if (droneGenerationTimerRef.current) window.clearTimeout(droneGenerationTimerRef.current);
+    droneGenerationTimerRef.current = null;
+  }, [stopDroneVoice]);
+
+  const createDroneVoice = useCallback(async (frequency: number, noteName: string) => {
+    const graph = await ensureAudio();
+    const settings = droneSettingsRef.current;
+    const now = graph.context.currentTime;
+    const id = droneVoiceIdRef.current += 1;
+    const voiceGain = graph.context.createGain();
+    const filter = graph.context.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 800;
+    filter.Q.value = 2;
+    const oscillators: Array<{ osc: OscillatorNode; gain: GainNode }> = [];
+    for (let index = 0; index < settings.oscCount; index += 1) {
+      const osc = graph.context.createOscillator();
+      const oscGain = graph.context.createGain();
+      osc.type = settings.waveform;
+      osc.frequency.value = frequency;
+      osc.detune.value = settings.oscCount > 1 ? (index / (settings.oscCount - 1) - 0.5) * 2 * settings.detuneCents : 0;
+      oscGain.gain.value = 0.8 + nextDroneRandom() * 0.4;
+      osc.connect(oscGain); oscGain.connect(filter); osc.start();
+      oscillators.push({ osc, gain: oscGain });
+    }
+    const filterLfo = graph.context.createOscillator();
+    filterLfo.frequency.value = settings.filterRate * (dronePrimes[Math.floor(nextDroneRandom() * dronePrimes.length)] / 10);
+    const filterLfoGain = graph.context.createGain();
+    filterLfoGain.gain.value = settings.filterDepth * 3000;
+    filterLfo.connect(filterLfoGain); filterLfoGain.connect(filter.frequency); filterLfo.start();
+    const pitchLfo = graph.context.createOscillator();
+    pitchLfo.frequency.value = settings.filterRate * 0.3 * (dronePrimes[Math.floor(nextDroneRandom() * dronePrimes.length)] / 10);
+    const pitchLfoGain = graph.context.createGain();
+    pitchLfoGain.gain.value = settings.pitchDrift * 50;
+    pitchLfo.connect(pitchLfoGain); oscillators.forEach(({ osc }) => pitchLfoGain.connect(osc.detune)); pitchLfo.start();
+    const volLfo = graph.context.createOscillator();
+    volLfo.frequency.value = settings.filterRate * 0.5 * (dronePrimes[Math.floor(nextDroneRandom() * dronePrimes.length)] / 10);
+    const volLfoGain = graph.context.createGain();
+    volLfoGain.gain.value = settings.volLfoDepth * 0.3;
+    volLfo.connect(volLfoGain); volLfoGain.connect(voiceGain.gain); volLfo.start();
+    filter.connect(voiceGain); voiceGain.connect(graph.droneDry); voiceGain.connect(graph.droneReverb); voiceGain.connect(graph.droneDelay);
+    const attackTime = 3 + nextDroneRandom() * 5;
+    const releaseTime = 6 + nextDroneRandom() * 8;
+    const sustainLevel = 0.15 + nextDroneRandom() * 0.1;
+    const noteDuration = 20 + nextDroneRandom() * 30;
+    voiceGain.gain.setValueAtTime(0.001, now);
+    voiceGain.gain.linearRampToValueAtTime(sustainLevel, now + attackTime);
+    voiceGain.gain.setValueAtTime(sustainLevel, now + noteDuration);
+    voiceGain.gain.linearRampToValueAtTime(0.001, now + noteDuration + releaseTime);
+    const voice = { noteName, oscillators, voiceGain, filter, filterLfo, filterLfoGain, pitchLfo, pitchLfoGain, volLfo, volLfoGain };
+    graph.droneVoices.set(id, voice);
+    setDroneVoiceCount(graph.droneVoices.size);
+    setDroneNotes(Array.from(graph.droneVoices.values()).map((item) => item.noteName));
+    addEvent(`drone ${noteName}`, 'voice');
+    window.setTimeout(() => stopDroneVoice(id), (noteDuration + releaseTime + 1) * 1000);
+  }, [addEvent, ensureAudio, nextDroneRandom, stopDroneVoice]);
+
+  const generateDroneNote = useCallback(async () => {
+    const graph = graphRef.current;
+    const settings = droneSettingsRef.current;
+    if (!droneRunningRef.current || dronePausedRef.current) return;
+    if (graph && graph.droneVoices.size >= settings.maxVoices) {
+      const primeMultiplier = 0.7 + (dronePrimes[Math.floor(nextDroneRandom() * 6)] / dronePrimes[6]) * 0.6;
+      droneGenerationTimerRef.current = window.setTimeout(generateDroneNote, settings.genSpeed * primeMultiplier * 1000);
+      return;
+    }
+    const scale = droneScales[settings.scale].intervals;
+    const random = nextDroneRandom();
+    const scaleIndex = Math.floor(Math.pow(random, 1.8) * scale.length * 2);
+    const octave = random < 0.4 ? 1 : random < 0.75 ? 2 : 3;
+    const semitones = scale[scaleIndex % scale.length] + Math.floor(scaleIndex / scale.length) * 12;
+    const frequency = settings.basePitch * Math.pow(2, (semitones + (octave - 1) * 12) / 12);
+    const noteNames = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
+    const totalSemitones = Math.round(12 * Math.log2(settings.basePitch / 16.351)) + semitones + (octave - 1) * 12;
+    await createDroneVoice(frequency, `${noteNames[((totalSemitones % 12) + 12) % 12]}${Math.floor(totalSemitones / 12)}`);
+    if (droneRunningRef.current && !dronePausedRef.current) {
+      const primeMultiplier = 0.7 + (dronePrimes[Math.floor(nextDroneRandom() * 6)] / dronePrimes[6]) * 0.6;
+      droneGenerationTimerRef.current = window.setTimeout(generateDroneNote, settings.genSpeed * primeMultiplier * 1000);
+    }
+  }, [createDroneVoice, nextDroneRandom]);
+
+  const startDroneEngine = useCallback(async () => {
+    await ensureAudio();
+    setPowered(true);
+    setDroneRunning(true);
+    setDronePaused(false);
+    droneRunningRef.current = true;
+    dronePausedRef.current = false;
+    setNotice('drone engine generating — incommensurable weather is moving');
+    addEvent('drone engine started', 'gesture');
+    window.setTimeout(generateDroneNote, 450);
+    window.setTimeout(generateDroneNote, 2450);
+  }, [addEvent, ensureAudio, generateDroneNote]);
+
+  const toggleDronePause = useCallback(() => {
+    setDronePaused((previous) => {
+      const next = !previous;
+      dronePausedRef.current = next;
+      setNotice(next ? 'drone generator paused — voices are still evolving' : 'drone generator resumed');
+      if (!next) window.setTimeout(generateDroneNote, 80);
+      return next;
+    });
+  }, [generateDroneNote]);
+
+  const newDroneSeed = useCallback(() => {
+    const nextSeed = Math.floor(Math.random() * 100000);
+    droneSeedRef.current = nextSeed;
+    setDroneSeed(nextSeed);
+    setNotice(`new drone seed ${nextSeed} — a different weather system is forming`);
+    addEvent('drone seed changed', 'gesture');
+    if (droneRunningRef.current && !dronePausedRef.current) window.setTimeout(generateDroneNote, 80);
+  }, [addEvent, generateDroneNote]);
+
+  const updateDroneSetting = <K extends keyof DroneSettings>(key: K, value: DroneSettings[K]) => {
+    setDroneSettings((previous) => ({ ...previous, [key]: value }));
+  };
+
   const togglePower = useCallback(async () => {
-    if (powered) { graphRef.current?.context.suspend(); setPowered(false); setSequencerPlaying(false); setNotice('engine asleep'); addEvent('engine asleep', 'gesture'); return; }
+    if (powered) { graphRef.current?.context.suspend(); setPowered(false); setSequencerPlaying(false); setDroneRunning(false); droneRunningRef.current = false; stopAllDroneVoices(); setNotice('engine asleep'); addEvent('engine asleep', 'gesture'); return; }
     await ensureAudio(); setPowered(true); setNotice('engine awake — touch a body'); addEvent('engine awake', 'gesture');
-  }, [addEvent, ensureAudio, powered]);
+  }, [addEvent, ensureAudio, powered, stopAllDroneVoices]);
 
   const toggleSequencer = useCallback(async () => {
     if (sequencerPlaying) {
@@ -565,6 +783,61 @@ export default function Home() {
     }, Math.max(360, 900 - macrosRef.current.space * 4));
     return () => window.clearInterval(interval);
   }, [heldPercs, powered, triggerPercussion]);
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    const now = graph.context.currentTime;
+    graph.droneMaster.gain.setTargetAtTime(droneSettings.masterVolume, now, 0.08);
+    graph.droneReverbWet.gain.setTargetAtTime(droneSettings.reverbAmount, now, 0.12);
+    graph.droneDry.gain.setTargetAtTime(1 - droneSettings.reverbAmount * 0.5, now, 0.12);
+    graph.droneDelayWet.gain.setTargetAtTime(droneSettings.delayAmount, now, 0.12);
+    graph.droneDelay.delayTime.setTargetAtTime(droneSettings.delayTime, now, 0.12);
+    graph.droneVoices.forEach((voice) => {
+      voice.filterLfo.frequency.setTargetAtTime(droneSettings.filterRate, now, 0.2);
+      voice.filterLfoGain.gain.setTargetAtTime(droneSettings.filterDepth * 3000, now, 0.2);
+      voice.pitchLfo.frequency.setTargetAtTime(droneSettings.filterRate * 0.3, now, 0.2);
+      voice.pitchLfoGain.gain.setTargetAtTime(droneSettings.pitchDrift * 50, now, 0.2);
+      voice.volLfo.frequency.setTargetAtTime(droneSettings.filterRate * 0.5, now, 0.2);
+      voice.volLfoGain.gain.setTargetAtTime(droneSettings.volLfoDepth * 0.3, now, 0.2);
+    });
+  }, [droneSettings]);
+
+  useEffect(() => {
+    const canvas = droneCanvasRef.current;
+    const graph = graphRef.current;
+    if (!canvas || !graph) return;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    let frame = 0;
+    const draw = () => {
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      const ratio = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.floor(width * ratio) || canvas.height !== Math.floor(height * ratio)) {
+        canvas.width = Math.floor(width * ratio); canvas.height = Math.floor(height * ratio);
+      }
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, width, height);
+      const data = new Uint8Array(graph.analyser.frequencyBinCount);
+      graph.analyser.getByteFrequencyData(data);
+      const bars = Math.min(96, data.length);
+      const gap = 2;
+      const barWidth = Math.max(2, (width - gap * bars) / bars);
+      for (let index = 0; index < bars; index += 1) {
+        const value = data[index] / 255;
+        const barHeight = Math.max(2, value * height * 0.78);
+        const gradient = context.createLinearGradient(0, height - barHeight, 0, height);
+        gradient.addColorStop(0, 'rgba(121, 169, 255, .95)');
+        gradient.addColorStop(1, 'rgba(165, 147, 255, .08)');
+        context.fillStyle = gradient;
+        context.fillRect(index * (barWidth + gap), height - barHeight, barWidth, barHeight);
+      }
+      frame = window.requestAnimationFrame(draw);
+    };
+    draw();
+    return () => window.cancelAnimationFrame(frame);
+  }, [droneRunning, openModules.sound, powered]);
 
   useEffect(() => {
     if (!graphRef.current) return;
@@ -747,7 +1020,20 @@ export default function Home() {
         <div className="lick-grid">{jazzLicks.map((lick, index) => <article className={`lick-card lick-${lick.colour}`} key={lick.name}><div className="lick-card-top"><span>0{index + 1}</span><b>{lick.idea}</b></div><h3>{lick.name}</h3><div className="lick-phrase" aria-label={lick.phrase}>{lick.phrase.split('/').map((bar, barIndex) => <div className="lick-bar" key={`${lick.name}-${barIndex}`}><span>{['Am7', 'D7', 'Gmaj7'][barIndex]}</span><div>{bar.split('·').map((note, noteIndex) => <b key={`${note.trim()}-${noteIndex}`}>{note.trim()}</b>)}</div></div>)}</div><div className="lick-card-bottom"><small>ii &nbsp;→&nbsp; V &nbsp;→&nbsp; I</small><button type="button" onClick={() => foldJazzLickIntoDrone(lick)}>FOLD INTO DRONE <span aria-hidden="true">↗</span></button></div></article>)}</div>
         <div className="lick-note"><span>LISTENING NOTE</span><p>The engraved notation and TAB are playing above. In the drone, use the sequencer as the sustained harmonic bed; each card sets the engine to G major and keeps the ii–V–I colour close at hand.</p></div>
       </div>}</section>
-      <section className={`console-panel sound-console ${surface === 'sound' ? 'is-focused' : ''} ${openModules.sound ? '' : 'is-folded'}`} aria-label="Sound module" onPointerDown={() => setSurface('sound')}><header className="module-rail"><span>01</span><strong>SOUND</strong><small>drone field</small><button type="button" aria-expanded={openModules.sound} onClick={() => setOpenModules((previous) => ({ ...previous, sound: !previous.sound }))}>{openModules.sound ? 'FOLD −' : 'OPEN +'}</button></header>{openModules.sound && <div className="sound-surface"><div className="surface-heading"><div><span>DRONE FIELD</span><h2>Eight voices, one nervous system</h2></div><p>Touch a body. Latch the ones that want to stay. The rest will keep listening.</p></div><div className="voice-grid">{voices.map((voice) => <article className={`voice-module tone-${voice.tone} ${activeVoices.includes(voice.id) ? 'is-active' : ''}`} key={voice.id}><div className="module-index">0{voice.id + 1}</div><button className="voice-pad" type="button" onClick={() => activateVoice(voice.id)}><span className="voice-core" aria-hidden="true" /><strong>{voice.name}</strong><small>{Math.round(voice.base * (0.94 + macros.tension / 100 * 0.12))} Hz · {voice.role}</small></button><label><span>TUNE <output>{Math.round(24 + (voice.base / 262) * 36)}</output></span><input aria-label={`${voice.name} tune`} type="range" min="24" max="76" defaultValue={Math.round(24 + (voice.base / 262) * 36)} /></label><button className={`latch-button ${latchedVoices.includes(voice.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleLatch(voice.id)}><span aria-hidden="true" />{latchedVoices.includes(voice.id) ? 'LATCHED' : 'LATCH'}</button></article>)}</div><div className="surface-heading percussion-heading"><div><span>PULSE FIELD</span><h2>Four percussive bodies</h2></div><p>Every impact changes the shared breath. Hold one open and it becomes a heartbeat.</p></div><div className="percussion-grid">{percussion.map((item) => <article className={`percussion-module ${item.tone}`} key={item.id}><button className="percussion-pad" type="button" onClick={() => triggerPercussion(item.id)}><span aria-hidden="true" /><strong>{item.name}</strong><small>{item.role}</small></button><label><span>DECAY <output>{48 + item.id * 10}</output></span><input aria-label={`${item.name} decay`} type="range" min="5" max="100" defaultValue={48 + item.id * 10} /></label><button className={`hold-button ${heldPercs.includes(item.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleHold(item.id)}>{heldPercs.includes(item.id) ? 'RELEASE DRONE' : 'HOLD AS DRONE'}</button></article>)}</div></div>}</section>
+      <section className={`console-panel sound-console ${surface === 'sound' ? 'is-focused' : ''} ${openModules.sound ? '' : 'is-folded'}`} aria-label="Sound module" onPointerDown={() => setSurface('sound')}><header className="module-rail"><span>01</span><strong>SOUND</strong><small>drone field</small><button type="button" aria-expanded={openModules.sound} onClick={() => setOpenModules((previous) => ({ ...previous, sound: !previous.sound }))}>{openModules.sound ? 'FOLD −' : 'OPEN +'}</button></header>{openModules.sound && <div className="sound-surface">
+        <section className="drone-engine-surface" aria-label="Self-generating drone engine">
+          <div className="surface-heading"><div><span>SELF-GENERATING AMBIENT</span><h2>Drone engine / never the same twice</h2></div><p>Prime-timed voices bloom around the existing instrument. Start this layer when the field needs more air.</p></div>
+          <div className="drone-visualizer-wrap"><canvas ref={droneCanvasRef} aria-label="Live drone spectrum visualizer" /><div className="drone-viz-label">SPECTRUM / INCOMMENSURABLE WEATHER</div><div className={`drone-viz-status ${droneRunning && !dronePaused ? 'is-running' : ''}`}><span />{dronePaused ? 'PAUSED' : droneRunning ? 'GENERATING' : 'STANDBY'}</div></div>
+          <div className="drone-readout"><span>ACTIVE VOICES <strong>{droneVoiceCount}</strong> / {droneSettings.maxVoices}</span><span>NOTES <strong>{droneNotes.length ? droneNotes.join(' · ') : '—'}</strong></span><span>SEED <strong>{droneSeed || 'AUTO'}</strong></span></div>
+          <div className="drone-control-grid">
+            <section className="drone-control-panel"><h3>TONE</h3><label><span>BASE PITCH <output>{droneSettings.basePitch} Hz</output></span><input type="range" min="27" max="110" value={droneSettings.basePitch} onChange={(event) => updateDroneSetting('basePitch', Number(event.target.value))} /></label><label><span>DETUNE SPREAD <output>{droneSettings.detuneCents} cents</output></span><input type="range" min="0" max="30" value={droneSettings.detuneCents} onChange={(event) => updateDroneSetting('detuneCents', Number(event.target.value))} /></label><label><span>OSCILLATORS <output>{droneSettings.oscCount}</output></span><input type="range" min="2" max="8" value={droneSettings.oscCount} onChange={(event) => updateDroneSetting('oscCount', Number(event.target.value))} /></label><div className="drone-button-row"><span>WAVEFORM</span>{(['sine', 'triangle', 'sawtooth'] as OscillatorType[]).map((waveform) => <button key={waveform} className={droneSettings.waveform === waveform ? 'is-active' : ''} type="button" onClick={() => updateDroneSetting('waveform', waveform)}>{waveform === 'sawtooth' ? 'SAW' : waveform === 'triangle' ? 'TRI' : 'SINE'}</button>)}</div></section>
+            <section className="drone-control-panel"><h3>MODULATION</h3><label><span>FILTER SWEEP SPEED <output>{droneSettings.filterRate.toFixed(3)} Hz</output></span><input type="range" min="0.005" max="0.5" step="0.005" value={droneSettings.filterRate} onChange={(event) => updateDroneSetting('filterRate', Number(event.target.value))} /></label><label><span>FILTER DEPTH <output>{Math.round(droneSettings.filterDepth * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.filterDepth * 100} onChange={(event) => updateDroneSetting('filterDepth', Number(event.target.value) / 100)} /></label><label><span>PITCH DRIFT <output>{Math.round(droneSettings.pitchDrift * 100)}%</output></span><input type="range" min="0" max="50" value={droneSettings.pitchDrift * 100} onChange={(event) => updateDroneSetting('pitchDrift', Number(event.target.value) / 100)} /></label><label><span>VOLUME SWELL <output>{Math.round(droneSettings.volLfoDepth * 100)}%</output></span><input type="range" min="0" max="80" value={droneSettings.volLfoDepth * 100} onChange={(event) => updateDroneSetting('volLfoDepth', Number(event.target.value) / 100)} /></label></section>
+            <section className="drone-control-panel"><h3>SPACE</h3><label><span>REVERB <output>{Math.round(droneSettings.reverbAmount * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.reverbAmount * 100} onChange={(event) => updateDroneSetting('reverbAmount', Number(event.target.value) / 100)} /></label><label><span>DELAY <output>{Math.round(droneSettings.delayAmount * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.delayAmount * 100} onChange={(event) => updateDroneSetting('delayAmount', Number(event.target.value) / 100)} /></label><label><span>DELAY TIME <output>{droneSettings.delayTime.toFixed(1)} s</output></span><input type="range" min="0.1" max="3" step="0.1" value={droneSettings.delayTime} onChange={(event) => updateDroneSetting('delayTime', Number(event.target.value))} /></label><label><span>MASTER VOLUME <output>{Math.round(droneSettings.masterVolume * 100)}%</output></span><input type="range" min="0" max="100" value={droneSettings.masterVolume * 100} onChange={(event) => updateDroneSetting('masterVolume', Number(event.target.value) / 100)} /></label></section>
+            <section className="drone-control-panel drone-control-panel-full"><h3>SCALE & GENERATION</h3><div className="drone-scale-row">{(Object.keys(droneScales) as DroneScaleName[]).map((name) => <button key={name} className={droneSettings.scale === name ? 'is-active' : ''} type="button" onClick={() => updateDroneSetting('scale', name)}>{droneScales[name].label}</button>)}</div><label><span>NEW NOTE INTERVAL <output>{droneSettings.genSpeed} s</output></span><input type="range" min="2" max="30" value={droneSettings.genSpeed} onChange={(event) => updateDroneSetting('genSpeed', Number(event.target.value))} /></label><label><span>MAX VOICES <output>{droneSettings.maxVoices}</output></span><input type="range" min="1" max="12" value={droneSettings.maxVoices} onChange={(event) => updateDroneSetting('maxVoices', Number(event.target.value))} /></label><div className="drone-engine-actions"><button className="drone-begin-button" type="button" onClick={droneRunning ? toggleDronePause : startDroneEngine}>{droneRunning ? (dronePaused ? 'RESUME GENERATOR' : 'PAUSE GENERATOR') : 'BEGIN DRONE ENGINE'}</button><button type="button" onClick={newDroneSeed}>NEW SEED</button><button className="drone-stop-button" type="button" onClick={() => { stopAllDroneVoices(); setDroneRunning(false); droneRunningRef.current = false; setDronePaused(false); setNotice('drone voices released — the rest of the instrument is still here'); addEvent('drone voices stopped', 'gesture'); }}>STOP ALL</button></div></section>
+          </div>
+          <p className="drone-engine-note">Web Audio only · multiple detuned oscillators · slow LFOs · procedural reverb · prime-number timing</p>
+        </section>
+        <div className="surface-heading"><div><span>MANUAL VOICE FIELD</span><h2>Eight voices, one nervous system</h2></div><p>Touch a body. Latch the ones that want to stay. The rest will keep listening.</p></div><div className="voice-grid">{voices.map((voice) => <article className={`voice-module tone-${voice.tone} ${activeVoices.includes(voice.id) ? 'is-active' : ''}`} key={voice.id}><div className="module-index">0{voice.id + 1}</div><button className="voice-pad" type="button" onClick={() => activateVoice(voice.id)}><span className="voice-core" aria-hidden="true" /><strong>{voice.name}</strong><small>{Math.round(voice.base * (0.94 + macros.tension / 100 * 0.12))} Hz · {voice.role}</small></button><label><span>TUNE <output>{Math.round(24 + (voice.base / 262) * 36)}</output></span><input aria-label={`${voice.name} tune`} type="range" min="24" max="76" defaultValue={Math.round(24 + (voice.base / 262) * 36)} /></label><button className={`latch-button ${latchedVoices.includes(voice.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleLatch(voice.id)}><span aria-hidden="true" />{latchedVoices.includes(voice.id) ? 'LATCHED' : 'LATCH'}</button></article>)}</div><div className="surface-heading percussion-heading"><div><span>PULSE FIELD</span><h2>Four percussive bodies</h2></div><p>Every impact changes the shared breath. Hold one open and it becomes a heartbeat.</p></div><div className="percussion-grid">{percussion.map((item) => <article className={`percussion-module ${item.tone}`} key={item.id}><button className="percussion-pad" type="button" onClick={() => triggerPercussion(item.id)}><span aria-hidden="true" /><strong>{item.name}</strong><small>{item.role}</small></button><label><span>DECAY <output>{48 + item.id * 10}</output></span><input aria-label={`${item.name} decay`} type="range" min="5" max="100" defaultValue={48 + item.id * 10} /></label><button className={`hold-button ${heldPercs.includes(item.id) ? 'is-on' : ''}`} type="button" onClick={() => toggleHold(item.id)}>{heldPercs.includes(item.id) ? 'RELEASE DRONE' : 'HOLD AS DRONE'}</button></article>)}</div></div>}</section>
       <section className={`console-panel behaviour-console ${surface === 'behaviour' ? 'is-focused' : ''} ${openModules.behaviour ? '' : 'is-folded'}`} aria-label="Behaviour module" onPointerDown={() => setSurface('behaviour')}><header className="module-rail"><span>04</span><strong>BEHAVIOUR</strong><small>cell autonomy</small><button type="button" aria-expanded={openModules.behaviour} onClick={() => setOpenModules((previous) => ({ ...previous, behaviour: !previous.behaviour }))}>{openModules.behaviour ? 'FOLD −' : 'OPEN +'}</button></header>{openModules.behaviour && <><div className="behaviour-switch"><div><span>CELL AUTONOMY</span><strong>{behaviourRunning ? 'Cells are moving beside the melody' : 'Cells are sleeping'}</strong><small>Keep this off for a clear sequence; wake it when you want organic interference.</small></div><button className={behaviourRunning ? 'is-on' : ''} type="button" onClick={toggleBehaviourNetwork}>{behaviourRunning ? 'LET CELLS SLEEP' : 'WAKE CELLS'}</button></div><div className="behaviour-surface"><div className="surface-heading"><div><span>BEHAVIOUR NETWORK</span><h2>Eight cells with unfinished plans</h2></div><p>Cells drift, wake each other and forget what they meant to do.</p></div><div className="network-field"><div className="network-lines" aria-hidden="true"><i /><i /><i /><i /><i /></div>{cells.map((cell) => <article className={`cell cell-${cell.colour} ${pulse === cell.id ? 'is-pulsing' : ''}`} key={cell.id}><div className="cell-orbit" /><div className="cell-head"><span>0{cell.id + 1}</span><strong>{cell.name}</strong><b>{cell.mode}</b></div><div className="cell-body"><div className="cell-target">{cell.kind === 'voice' ? voices[cell.target]?.name : percussion[cell.target]?.name}</div><div className="cell-stats"><span>{cell.interval}ms</span><span>{cell.probability}% chance</span></div></div><label><span>PROBABILITY <output>{cell.probability}</output></span><input type="range" min="0" max="100" value={cell.probability} onChange={(event) => setCells((previous) => previous.map((entry) => entry.id === cell.id ? { ...entry, probability: Number(event.target.value) } : entry))} /></label><select aria-label={`${cell.name} mode`} value={cell.mode} onChange={(event) => setCells((previous) => previous.map((entry) => entry.id === cell.id ? { ...entry, mode: event.target.value as CellMode } : entry))}>{modes.map((mode) => <option key={mode}>{mode}</option>)}</select></article>)}</div></div></>}</section>
       <section className={`console-panel patch-console ${surface === 'patch' ? 'is-focused' : ''} ${openModules.patch ? '' : 'is-folded'}`} aria-label="Patch module" onPointerDown={() => setSurface('patch')}><header className="module-rail"><span>05</span><strong>PATCH</strong><small>signal metabolism</small><button type="button" aria-expanded={openModules.patch} onClick={() => setOpenModules((previous) => ({ ...previous, patch: !previous.patch }))}>{openModules.patch ? 'FOLD −' : 'OPEN +'}</button></header>{openModules.patch && <div className="patch-surface"><div className="surface-heading"><div><span>PATCH WEATHER</span><h2>Everything can feed everything</h2></div><p>Choose a source and destination, then let the organism metabolise the connection.</p></div><div className="patch-grid"><div className="patch-column"><span className="column-label">SOURCES</span>{['Breath A', 'Breath B', 'Uncertainty', 'Feedback weather'].map((source) => <button className={`patch-node source ${patchSource === source ? 'is-selected' : ''}`} key={source} type="button" onClick={() => { setPatchSource(source); setNotice(`${source} is ready to feed ${patchTarget}`); }}><i />{source}<small>signal</small></button>)}</div><div className="patch-visual"><div className="signal signal-one" /><div className="signal signal-two" /><div className="signal signal-three" /><button className="patch-connect" type="button" onClick={connectPatch}>CONNECT<div>{patchSource} → {patchTarget}</div></button></div><div className="patch-column"><span className="column-label">TARGETS</span>{['Voice pairs', 'Filter', 'Delay', 'Drive'].map((target) => <button className={`patch-node target ${patchTarget === target ? 'is-selected' : ''}`} key={target} type="button" onClick={() => { setPatchTarget(target); setNotice(`${patchSource} is ready to feed ${target}`); }}><i />{target}<small>destination</small></button>)}</div></div><div className="cable-list">{patches.map((patch) => <article className="cable" key={patch.id}><span className="cable-dot" /><strong>{patch.source}</strong><span className="cable-arrow">→</span><strong>{patch.target}</strong><label><span>AMOUNT <output>{patch.amount}</output></span><input type="range" min="-100" max="100" value={patch.amount} onChange={(event) => setPatches((previous) => previous.map((entry) => entry.id === patch.id ? { ...entry, amount: Number(event.target.value) } : entry))} /></label><button type="button" onClick={() => setPatches((previous) => previous.filter((entry) => entry.id !== patch.id))}>REMOVE</button></article>)}</div></div>}</section>
     </section>
