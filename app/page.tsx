@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
-import { isTauri } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { save as saveFileDialog } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 
@@ -14,6 +15,13 @@ type PulsePattern = 'off' | 'steady' | 'doom' | 'sparse';
 type DroneSettings = { basePitch: number; detuneCents: number; oscCount: number; waveform: OscillatorType; modulationShape: ModulationShape; filterRate: number; filterDepth: number; pitchDrift: number; volLfoDepth: number; panDepth: number; noiseColor: NoiseColor; noiseAmount: number; reverbAmount: number; delayAmount: number; delayTime: number; delayFeedback: number; chorusAmount: number; driveAmount: number; masterVolume: number; scale: DroneScaleName; genSpeed: number; maxVoices: number; eqLowGain: number; eqMidGain: number; eqHighGain: number; compThreshold: number; compRatio: number; limiterCeiling: number };
 type DroneVoiceNode = { noteName: string; semitone: number; oscillators: Array<{ osc: OscillatorNode; gain: GainNode }>; subOsc: OscillatorNode; subGain: GainNode; airOsc: OscillatorNode; airGain: GainNode; voiceGain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode; filterLfo: OscillatorNode; filterLfoGain: GainNode; pitchLfo: OscillatorNode; pitchLfoGain: GainNode; volLfo: OscillatorNode; volLfoGain: GainNode; panLfo: OscillatorNode; panLfoGain: GainNode; randomInterval: number | null };
 type SampleSettings = { grainRate: number; grainPitch: number; grainVolume: number; grainSize: number; grainDrift: number; grainDensity: number };
+type PatchCables = { toneToMod: boolean; modToSpace: boolean; spaceToTone: boolean };
+type VocalSettings = { pitch: number; formant: number; tube: number };
+type MidiMode = 'off' | 'trigger' | 'root';
+type MidiInputPort = { index: number; name: string };
+type MidiMessage = { messageType: 'noteOn' | 'noteOff' | 'clock' | 'start' | 'continue' | 'stop'; channel: number | null; note: number | null; velocity: number | null };
+type MidiStatus = { state: 'connected' | 'disconnected' | 'error'; message: string };
+type LiveVoice = { oscillators: OscillatorNode[]; subOsc: OscillatorNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode };
 type Graph = {
   context: AudioContext; master: GainNode; toneHigh: BiquadFilterNode; toneLow: BiquadFilterNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode;
   eqLow: BiquadFilterNode; eqMid: BiquadFilterNode; eqHigh: BiquadFilterNode; limiter: DynamicsCompressorNode;
@@ -22,7 +30,7 @@ type Graph = {
   droneDelay: DelayNode; droneDelayFilter: BiquadFilterNode; droneDelayFeedback: GainNode; droneDelayWet: GainNode;
   droneNoise: AudioBufferSourceNode; droneNoiseFilter: BiquadFilterNode; droneNoiseGain: GainNode;
   droneVoices: Map<number, DroneVoiceNode>;
-  sampleGain: GainNode; sampleFilter: BiquadFilterNode; sampleBuffer: AudioBuffer | null; loopSource: AudioBufferSourceNode | null; granularTimer: number | null;
+  sampleGain: GainNode; sampleFilter: BiquadFilterNode; sampleFormantFilters: BiquadFilterNode[]; sampleTubeDrive: WaveShaperNode; sampleTubeTone: BiquadFilterNode; sampleBuffer: AudioBuffer | null; sampleOriginalBuffer: AudioBuffer | null; loopSource: AudioBufferSourceNode | null; granularTimer: number | null;
   recordProcessor: ScriptProcessorNode | null;
   pulseOsc: OscillatorNode; pulseGain: GainNode; pulseFilter: BiquadFilterNode; pulseTimer: number | null; pulseStep: number;
   wanderLfo: OscillatorNode; wanderReverbGain: GainNode; wanderToneGain: GainNode; wanderChorusGain: GainNode;
@@ -58,6 +66,7 @@ const defaultDroneSettings: DroneSettings = {
   eqLowGain: 0, eqMidGain: 0, eqHighGain: 0, compThreshold: -18, compRatio: 6, limiterCeiling: -1,
 };
 const defaultSampleSettings: SampleSettings = { grainRate: 0.5, grainPitch: -12, grainVolume: 0.6, grainSize: 2.0, grainDrift: 0.3, grainDensity: 4 };
+const defaultVocalSettings: VocalSettings = { pitch: 0, formant: 0, tube: 0 };
 const MIC_MAX_SECONDS = 60;
 // Overall level for uploaded/recorded Audio Input playback. Was 0.4 — far
 // too conservative next to grain envelope peaks that were already quiet,
@@ -83,6 +92,17 @@ const createDriveCurve = (amount: number) => {
   for (let index = 0; index < curve.length; index += 1) {
     const x = (index * 2) / (curve.length - 1) - 1;
     curve[index] = amount <= 0.001 ? x : Math.tanh(x * drive) / Math.tanh(drive);
+  }
+  return curve;
+};
+const createTubeCurve = (amount: number) => {
+  const curve = new Float32Array(4096);
+  const drive = 1 + amount * 9;
+  for (let index = 0; index < curve.length; index += 1) {
+    const x = (index * 2) / (curve.length - 1) - 1;
+    // A restrained asymmetric response keeps the vocal warm before it reaches
+    // the main FX bus instead of turning into a harsh distortion stage.
+    curve[index] = amount <= 0.001 ? x : (Math.tanh(x * drive * (x >= 0 ? 1.08 : 0.88)) + x * 0.08) / 1.08;
   }
   return curve;
 };
@@ -119,6 +139,10 @@ const createNoiseBuffer = (context: AudioContext, duration = 2) => {
   return buffer;
 };
 const formatHertz = (value: number) => String(Number(value.toFixed(3)));
+const formatDuration = (seconds: number) => {
+  const wholeSeconds = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(wholeSeconds / 60)}:${String(wholeSeconds % 60).padStart(2, '0')}`;
+};
 const floatTo16BitPCM = (input: Float32Array) => {
   const output = new Int16Array(input.length);
   for (let index = 0; index < input.length; index += 1) {
@@ -139,14 +163,19 @@ export default function DroneEnginePage() {
 
   // Audio Input: drop in any sound file and it becomes a granular/looped drone.
   const [sampleSettings, setSampleSettings] = useState<SampleSettings>(defaultSampleSettings);
+  const [vocalSettings, setVocalSettings] = useState<VocalSettings>(defaultVocalSettings);
+  const [vocalRenderStatus, setVocalRenderStatus] = useState('Ready');
   const [sampleMode, setSampleMode] = useState<SampleMode>('granular');
   const [sampleThroughFx, setSampleThroughFx] = useState(true);
   const [sampleLoaded, setSampleLoaded] = useState(false);
   const [sampleName, setSampleName] = useState('');
   const [sampleMeta, setSampleMeta] = useState('');
+  const [sampleDuration, setSampleDuration] = useState(0);
   const [sampleStatus, setSampleStatus] = useState('None');
   const [isDragging, setIsDragging] = useState(false);
   const [sampleError, setSampleError] = useState<string | null>(null);
+  const [samplePosition, setSamplePosition] = useState(0);
+  const [sampleActive, setSampleActive] = useState(false);
 
   // Mic recording: capture a short sound or vocal take and feed it into the
   // same sample engine as a dropped file (granular/loop, Through FX Chain).
@@ -176,18 +205,40 @@ export default function DroneEnginePage() {
   // to Pulse/Wander rather than the primary interaction.
   const [keyboardPlayOn, setKeyboardPlayOn] = useState(false);
   const [activeKeys, setActiveKeys] = useState<Record<string, boolean>>({});
+  const [keyboardTranspose, setKeyboardTranspose] = useState(0);
+  const [keyboardShine, setKeyboardShine] = useState(35);
+  const [midiPorts, setMidiPorts] = useState<MidiInputPort[]>([]);
+  const [midiPortIndex, setMidiPortIndex] = useState<number | null>(null);
+  const [midiStatus, setMidiStatus] = useState('No MIDI input connected');
+  const [midiMode, setMidiMode] = useState<MidiMode>('off');
+  const [midiClockSync, setMidiClockSync] = useState(false);
+  const [midiBpm, setMidiBpm] = useState<number | null>(null);
+  const [patchCables, setPatchCables] = useState<PatchCables>({ toneToMod: true, modToSpace: true, spaceToTone: false });
 
   const graphRef = useRef<Graph | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const masteringCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sampleWaveformRef = useRef<HTMLCanvasElement | null>(null);
   const settingsRef = useRef(settings);
   const sampleSettingsRef = useRef(sampleSettings);
+  const samplePositionRef = useRef(samplePosition);
+  const granularPositionRef = useRef(0);
+  const sampleActiveRef = useRef(sampleActive);
+  const scheduleNextGrainRef = useRef<() => void>(() => {});
+  const schedulePulseRef = useRef<() => void>(() => {});
+  const vocalRenderVersionRef = useRef(0);
   const runningRef = useRef(false);
   const pausedRef = useRef(false);
   const generationTimerRef = useRef<number | null>(null);
   const seedRef = useRef(0);
   const voiceIdRef = useRef(0);
   const generateNoteRef = useRef<() => void>(() => {});
-  const keyVoicesRef = useRef<Map<string, { oscillators: OscillatorNode[]; subOsc: OscillatorNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode }>>(new Map());
+  const keyVoicesRef = useRef<Map<string, LiveVoice>>(new Map());
+  const midiVoicesRef = useRef<Map<string, LiveVoice>>(new Map());
+  const midiModeRef = useRef<MidiMode>(midiMode);
+  const midiClockSyncRef = useRef(midiClockSync);
+  const midiRootNoteRef = useRef<number | null>(null);
+  const midiClockRef = useRef({ ticks: 0, startedAt: 0 });
 
   const recordedLeftRef = useRef<Float32Array[]>([]);
   const recordedRightRef = useRef<Float32Array[]>([]);
@@ -203,6 +254,10 @@ export default function DroneEnginePage() {
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => { sampleSettingsRef.current = sampleSettings; }, [sampleSettings]);
+  useEffect(() => { samplePositionRef.current = samplePosition; }, [samplePosition]);
+  useEffect(() => { sampleActiveRef.current = sampleActive; }, [sampleActive]);
+  useEffect(() => { midiModeRef.current = midiMode; if (midiMode !== 'root') midiRootNoteRef.current = null; }, [midiMode]);
+  useEffect(() => { midiClockSyncRef.current = midiClockSync; }, [midiClockSync]);
   useEffect(() => { seedRef.current = Math.floor(Math.random() * 100000); }, []);
 
   const nextRandom = useCallback(() => {
@@ -246,6 +301,9 @@ export default function DroneEnginePage() {
     const droneDelayFilter = context.createBiquadFilter();
     const sampleGain = context.createGain();
     const sampleFilter = context.createBiquadFilter();
+    const sampleFormantFilters = [context.createBiquadFilter(), context.createBiquadFilter(), context.createBiquadFilter()];
+    const sampleTubeDrive = context.createWaveShaper();
+    const sampleTubeTone = context.createBiquadFilter();
     const pulseOsc = context.createOscillator();
     const pulseGain = context.createGain();
     const pulseFilter = context.createBiquadFilter();
@@ -313,8 +371,25 @@ export default function DroneEnginePage() {
     sampleFilter.type = 'lowpass';
     sampleFilter.frequency.value = 9000;
     sampleFilter.Q.value = 0.7;
+    const baseFormants = [730, 1090, 2440];
+    sampleFormantFilters.forEach((filter, index) => {
+      filter.type = 'peaking';
+      filter.frequency.value = baseFormants[index];
+      filter.Q.value = 5;
+      filter.gain.value = 0;
+    });
+    sampleTubeDrive.curve = createTubeCurve(0);
+    sampleTubeDrive.oversample = '4x';
+    sampleTubeTone.type = 'lowpass';
+    sampleTubeTone.frequency.value = 16000;
+    sampleTubeTone.Q.value = 0.5;
     sampleGain.gain.value = defaultSampleSettings.grainVolume * SAMPLE_GAIN_SCALE;
-    sampleGain.connect(sampleFilter);
+    sampleGain.connect(sampleFormantFilters[0]);
+    sampleFormantFilters[0].connect(sampleFormantFilters[1]);
+    sampleFormantFilters[1].connect(sampleFormantFilters[2]);
+    sampleFormantFilters[2].connect(sampleTubeDrive);
+    sampleTubeDrive.connect(sampleTubeTone);
+    sampleTubeTone.connect(sampleFilter);
     sampleFilter.connect(droneDry);
     sampleFilter.connect(droneReverbPreDelay);
     sampleFilter.connect(droneDelay);
@@ -386,7 +461,7 @@ export default function DroneEnginePage() {
       context, master, toneHigh, toneLow, compressor, analyser, eqLow, eqMid, eqHigh, limiter, droneMaster, droneBus, droneDrive, droneChorusDry, droneChorusDelay, droneChorusWet, droneChorusLfo, droneChorusDepth,
       droneDry, droneReverb, droneReverbPreDelay, droneReverbWet, droneDelay, droneDelayFilter, droneDelayFeedback, droneDelayWet, droneNoise, droneNoiseFilter, droneNoiseGain,
       droneVoices: new Map(),
-      sampleGain, sampleFilter, sampleBuffer: null, loopSource: null, granularTimer: null,
+      sampleGain, sampleFilter, sampleFormantFilters, sampleTubeDrive, sampleTubeTone, sampleBuffer: null, sampleOriginalBuffer: null, loopSource: null, granularTimer: null,
       recordProcessor: null,
       pulseOsc, pulseGain, pulseFilter, pulseTimer: null, pulseStep: 0,
       wanderLfo, wanderReverbGain, wanderToneGain, wanderChorusGain,
@@ -525,7 +600,9 @@ export default function DroneEnginePage() {
       return;
     }
     const scale = droneScales[current.scale].intervals;
-    const baseMidi = Math.round(12 * Math.log2(current.basePitch / 16.351));
+    // In Root Pitch mode a held MIDI note becomes the root for the autonomous
+    // generator. Otherwise the panel's base-pitch control remains authoritative.
+    const baseMidi = midiRootNoteRef.current ?? Math.round(12 * Math.log2(current.basePitch / 16.351));
     // Every scale tone the engine is allowed to speak, across the working register
     const candidates: number[] = [];
     for (let octave = 0; octave < 3; octave += 1) {
@@ -601,6 +678,9 @@ export default function DroneEnginePage() {
   const updateSampleSetting = <K extends keyof SampleSettings>(key: K, value: SampleSettings[K]) => {
     setSampleSettings((previous) => ({ ...previous, [key]: value }));
   };
+  const updateVocalSetting = <K extends keyof VocalSettings>(key: K, value: VocalSettings[K]) => {
+    setVocalSettings((previous) => ({ ...previous, [key]: value }));
+  };
 
   useEffect(() => {
     const graph = graphRef.current;
@@ -613,10 +693,16 @@ export default function DroneEnginePage() {
     graph.compressor.threshold.setTargetAtTime(settings.compThreshold, now, 0.1);
     graph.compressor.ratio.setTargetAtTime(settings.compRatio, now, 0.1);
     graph.limiter.threshold.setTargetAtTime(settings.limiterCeiling, now, 0.1);
+    const spaceToneCut = patchCables.spaceToTone ? settings.reverbAmount * 1700 + settings.delayAmount * 800 : 0;
+    const modToSpaceAmount = patchCables.modToSpace ? settings.filterDepth * 0.12 : 0;
+    const toneToModRate = patchCables.toneToMod ? 0.65 + (settings.basePitch / 110) * 0.7 : 1;
+    graph.toneLow.frequency.setTargetAtTime(13500 - spaceToneCut, now, 0.3);
     graph.droneReverbWet.gain.setTargetAtTime(settings.reverbAmount, now, 0.12);
     graph.droneDry.gain.setTargetAtTime(1 - settings.reverbAmount * 0.5, now, 0.12);
-    graph.droneDelayWet.gain.setTargetAtTime(settings.delayAmount, now, 0.12);
-    graph.droneDelay.delayTime.setTargetAtTime(settings.delayTime, now, 0.12);
+    graph.droneDelayWet.gain.setTargetAtTime(Math.min(1, settings.delayAmount + modToSpaceAmount * 0.3), now, 0.18);
+    // Longer time constant prevents zipper-like pitch jumps when the delay
+    // control is moved while echoes are already ringing out.
+    graph.droneDelay.delayTime.setTargetAtTime(Math.min(3, settings.delayTime + modToSpaceAmount), now, 0.35);
     graph.droneDelayFeedback.gain.setTargetAtTime(settings.delayFeedback, now, 0.12);
     graph.droneDrive.curve = createDriveCurve(settings.driveAmount);
     graph.droneChorusDry.gain.setTargetAtTime(1 - settings.chorusAmount * 0.35, now, 0.12);
@@ -629,13 +715,13 @@ export default function DroneEnginePage() {
     graph.pulseOsc.frequency.setTargetAtTime(settings.basePitch / 2, now, 0.3);
     graph.droneVoices.forEach((voice) => {
       const sine = settings.modulationShape === 'sine';
-      voice.filterLfo.frequency.setTargetAtTime(settings.filterRate, now, 0.2);
+      voice.filterLfo.frequency.setTargetAtTime(settings.filterRate * toneToModRate, now, 0.2);
       voice.filterLfoGain.gain.setTargetAtTime(sine ? settings.filterDepth * 3000 : 0, now, 0.2);
-      voice.pitchLfo.frequency.setTargetAtTime(settings.filterRate * 0.3, now, 0.2);
+      voice.pitchLfo.frequency.setTargetAtTime(settings.filterRate * 0.3 * toneToModRate, now, 0.2);
       voice.pitchLfoGain.gain.setTargetAtTime(sine ? settings.pitchDrift * 50 : 0, now, 0.2);
-      voice.volLfo.frequency.setTargetAtTime(settings.filterRate * 0.5, now, 0.2);
+      voice.volLfo.frequency.setTargetAtTime(settings.filterRate * 0.5 * toneToModRate, now, 0.2);
       voice.volLfoGain.gain.setTargetAtTime(sine ? settings.volLfoDepth * 0.3 : 0, now, 0.2);
-      voice.panLfo.frequency.setTargetAtTime(settings.filterRate * 0.37, now, 0.2);
+      voice.panLfo.frequency.setTargetAtTime(settings.filterRate * 0.37 * toneToModRate, now, 0.2);
       voice.panLfoGain.gain.setTargetAtTime(sine ? settings.panDepth : 0, now, 0.2);
       if (voice.randomInterval) window.clearInterval(voice.randomInterval);
       voice.randomInterval = null;
@@ -652,7 +738,7 @@ export default function DroneEnginePage() {
         }, intervalMs);
       }
     });
-  }, [running, settings, nextRandom]);
+  }, [running, settings, patchCables, nextRandom]);
 
   // ── Audio Input: granular + loop engine ─────────────────────────
 
@@ -669,7 +755,10 @@ export default function DroneEnginePage() {
     const grainDur = current.grainSize;
     const rate = current.grainRate;
     const drift = current.grainDrift;
-    const centerPos = bufferDuration * 0.5;
+    // Granular mode scans through the source continuously; the position
+    // navigator sets the next place it scans from rather than pinning grains
+    // to one moment of the recording.
+    const centerPos = bufferDuration * granularPositionRef.current;
     const driftRange = bufferDuration * 0.4 * drift;
     let startPos = centerPos + (Math.random() - 0.5) * 2 * driftRange;
     startPos = Math.max(0, Math.min(startPos, Math.max(0.01, bufferDuration - grainDur / rate - 0.01)));
@@ -703,16 +792,25 @@ export default function DroneEnginePage() {
 
   const scheduleNextGrain = useCallback(() => {
     const graph = graphRef.current;
-    if (!graph || !graph.sampleBuffer || !runningRef.current) return;
-    if (pausedRef.current) { graph.granularTimer = window.setTimeout(scheduleNextGrain, 500); return; }
+    if (!graph || !graph.sampleBuffer || !runningRef.current || !sampleActiveRef.current) return;
+    if (pausedRef.current) { graph.granularTimer = window.setTimeout(() => scheduleNextGrainRef.current(), 500); return; }
     const current = sampleSettingsRef.current;
     const now = graph.context.currentTime;
     for (let index = 0; index < current.grainDensity; index += 1) {
       scheduleGrain(now + (index / current.grainDensity) * (current.grainSize * 0.5));
     }
+    // Advance proportionally to grain length, wrapping around the complete
+    // file so longer vocals do not get trapped around their opening second.
+    const scanStep = Math.max(0.015, Math.min(0.12, (current.grainSize / Math.max(current.grainRate, 0.1)) / graph.sampleBuffer.duration * 0.28));
+    const nextPosition = (granularPositionRef.current + scanStep) % 1;
+    granularPositionRef.current = nextPosition;
+    samplePositionRef.current = nextPosition;
+    setSamplePosition(nextPosition);
     const interval = (current.grainSize / current.grainRate) * 500;
-    graph.granularTimer = window.setTimeout(scheduleNextGrain, Math.max(interval, 200));
+    graph.granularTimer = window.setTimeout(() => scheduleNextGrainRef.current(), Math.max(interval, 200));
   }, [scheduleGrain]);
+
+  useEffect(() => { scheduleNextGrainRef.current = scheduleNextGrain; }, [scheduleNextGrain]);
 
   const startGranular = useCallback(() => {
     stopGranular();
@@ -731,23 +829,22 @@ export default function DroneEnginePage() {
 
   const startLoop = useCallback(() => {
     const graph = graphRef.current;
-    if (!graph || !graph.sampleBuffer) return;
+    if (!graph || !graph.sampleBuffer || !sampleActiveRef.current) return;
     stopLoop();
     const current = sampleSettingsRef.current;
     const source = graph.context.createBufferSource();
     source.buffer = graph.sampleBuffer;
+    const loopStart = Math.min(graph.sampleBuffer.duration - 0.01, graph.sampleBuffer.duration * samplePositionRef.current);
     source.loop = true;
+    source.loopStart = Math.max(0, loopStart);
+    source.loopEnd = graph.sampleBuffer.duration;
     source.playbackRate.value = current.grainRate;
     source.detune.value = current.grainPitch * 100;
     source.connect(graph.sampleGain);
-    source.start();
+    source.start(0, Math.max(0, loopStart));
     graph.loopSource = source;
     setSampleStatus('Loop');
   }, [stopLoop]);
-
-  const startSampleEngine = useCallback(() => {
-    if (sampleMode === 'granular') startGranular(); else startLoop();
-  }, [sampleMode, startGranular, startLoop]);
 
   const stopSampleEngine = useCallback(() => {
     stopGranular();
@@ -756,11 +853,18 @@ export default function DroneEnginePage() {
 
   const handleSampleFile = useCallback(async (file: File) => {
     setSampleError(null);
+    samplePositionRef.current = 0;
+    granularPositionRef.current = 0;
+    sampleActiveRef.current = true;
+    setSamplePosition(0);
+    setSampleActive(true);
     try {
       const graph = await ensureAudio();
       const arrayBuffer = await file.arrayBuffer();
       const decoded = await graph.context.decodeAudioData(arrayBuffer);
       graph.sampleBuffer = decoded;
+      graph.sampleOriginalBuffer = decoded;
+      setSampleDuration(decoded.duration);
       setSampleName(file.name);
       const minutes = Math.floor(decoded.duration / 60);
       const seconds = Math.floor(decoded.duration % 60);
@@ -776,20 +880,52 @@ export default function DroneEnginePage() {
   const removeSample = useCallback(() => {
     stopSampleEngine();
     const graph = graphRef.current;
-    if (graph) graph.sampleBuffer = null;
+    if (graph) { graph.sampleBuffer = null; graph.sampleOriginalBuffer = null; }
+    vocalRenderVersionRef.current += 1;
+    setVocalRenderStatus('Ready');
     setSampleLoaded(false);
     setSampleName('');
     setSampleMeta('');
+    setSampleDuration(0);
     setSampleStatus('None');
     setSampleError(null);
+    samplePositionRef.current = 0;
+    granularPositionRef.current = 0;
+    sampleActiveRef.current = false;
+    setSamplePosition(0);
+    setSampleActive(false);
   }, [stopSampleEngine]);
 
   const chooseSampleMode = useCallback((mode: SampleMode) => {
     setSampleMode(mode);
-    if (sampleLoaded) {
+    if (sampleLoaded && sampleActive) {
       if (mode === 'granular') { stopLoop(); startGranular(); } else { stopGranular(); startLoop(); }
     }
-  }, [sampleLoaded, startGranular, startLoop, stopGranular, stopLoop]);
+  }, [sampleActive, sampleLoaded, startGranular, startLoop, stopGranular, stopLoop]);
+
+  const moveSamplePosition = useCallback((amount: number) => {
+    if (!sampleLoaded) return;
+    const next = Math.max(0, Math.min(1, samplePositionRef.current + amount));
+    samplePositionRef.current = next;
+    granularPositionRef.current = next;
+    setSamplePosition(next);
+    // A loop can seek only by being re-created. For granular playback this
+    // also schedules a fresh cluster immediately at the newly chosen spot.
+    if (sampleActive) { if (sampleMode === 'loop') startLoop(); else startGranular(); }
+  }, [sampleActive, sampleLoaded, sampleMode, startGranular, startLoop]);
+
+  const toggleSampleActive = useCallback(() => {
+    if (!sampleLoaded) return;
+    const next = !sampleActiveRef.current;
+    sampleActiveRef.current = next;
+    setSampleActive(next);
+    if (next) {
+      if (sampleMode === 'granular') startGranular(); else startLoop();
+    } else {
+      stopSampleEngine();
+      setSampleStatus('Off');
+    }
+  }, [sampleLoaded, sampleMode, startGranular, startLoop, stopSampleEngine]);
 
   const toggleSampleThroughFx = useCallback(() => {
     setSampleThroughFx((previous) => {
@@ -820,16 +956,78 @@ export default function DroneEnginePage() {
     }
   }, [sampleSettings]);
 
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    const now = graph.context.currentTime;
+    const ratio = Math.pow(2, vocalSettings.formant / 12);
+    const emphasis = Math.abs(vocalSettings.formant) / 12 * 8;
+    const baseFormants = [730, 1090, 2440];
+    graph.sampleFormantFilters.forEach((filter, index) => {
+      filter.frequency.setTargetAtTime(Math.min(12000, baseFormants[index] * ratio), now, 0.12);
+      filter.gain.setTargetAtTime(emphasis, now, 0.12);
+    });
+    graph.sampleTubeDrive.curve = createTubeCurve(vocalSettings.tube / 100);
+    graph.sampleTubeTone.frequency.setTargetAtTime(16000 - vocalSettings.tube * 80, now, 0.12);
+  }, [vocalSettings]);
+
+  const renderVocalPitch = useCallback(async () => {
+    const graph = graphRef.current;
+    const original = graph?.sampleOriginalBuffer;
+    if (!graph || !original) return;
+    const version = ++vocalRenderVersionRef.current;
+    const semitones = vocalSettings.pitch;
+    if (semitones === 0) {
+      if (graph.sampleBuffer !== original) {
+        graph.sampleBuffer = original;
+        setSampleDuration(original.duration);
+        if (sampleActiveRef.current) { if (sampleMode === 'granular') startGranular(); else startLoop(); }
+      }
+      setVocalRenderStatus('Ready');
+      return;
+    }
+    setVocalRenderStatus('Rendering vocal pitch…');
+    // Yield once so the status lands before the CPU-heavy, whole-buffer DSP.
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    try {
+      const { formant } = await import('@audio/shift');
+      const input = Array.from({ length: original.numberOfChannels }, (_, channel) => original.getChannelData(channel).slice());
+      const shifted = formant(input, { semitones, sampleRate: original.sampleRate, frameSize: 2048 }) as Float32Array[];
+      if (version !== vocalRenderVersionRef.current) return;
+      const processed = graph.context.createBuffer(shifted.length, shifted[0].length, original.sampleRate);
+      shifted.forEach((channel, index) => processed.copyToChannel(channel, index));
+      graph.sampleBuffer = processed;
+      setSampleDuration(processed.duration);
+      if (sampleActiveRef.current) { if (sampleMode === 'granular') startGranular(); else startLoop(); }
+      setVocalRenderStatus('Ready');
+    } catch {
+      if (version === vocalRenderVersionRef.current) setVocalRenderStatus('Pitch render failed — original sample remains active');
+    }
+  }, [sampleMode, startGranular, startLoop, vocalSettings.pitch]);
+
+  useEffect(() => {
+    if (!sampleLoaded) return;
+    const timer = window.setTimeout(() => { void renderVocalPitch(); }, 180);
+    return () => window.clearTimeout(timer);
+  }, [sampleLoaded, renderVocalPitch]);
+
   // ── Audio Input: mic recording — capture a short sound/vocal take and
   // decode it into the same sampleBuffer a dropped file would use ─────
 
   const loadRecordedBlob = useCallback(async (blob: Blob) => {
     setMicState('processing');
+    samplePositionRef.current = 0;
+    granularPositionRef.current = 0;
+    sampleActiveRef.current = true;
+    setSamplePosition(0);
+    setSampleActive(true);
     try {
       const graph = await ensureAudio();
       const arrayBuffer = await blob.arrayBuffer();
       const decoded = await graph.context.decodeAudioData(arrayBuffer);
       graph.sampleBuffer = decoded;
+      graph.sampleOriginalBuffer = decoded;
+      setSampleDuration(decoded.duration);
       const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       setSampleName(`Voice recording — ${timestamp}`);
       const minutes = Math.floor(decoded.duration / 60);
@@ -1048,8 +1246,11 @@ export default function DroneEnginePage() {
     const step = pattern[graph.pulseStep % pattern.length];
     triggerPulseHit(pulseDepth);
     graph.pulseStep += 1;
-    graph.pulseTimer = window.setTimeout(schedulePulse, step * pulseSpeed * 1000);
-  }, [pulsePattern, pulseDepth, pulseSpeed, triggerPulseHit]);
+    const secondsPerStep = midiClockSync && midiBpm ? 60 / midiBpm : pulseSpeed;
+    graph.pulseTimer = window.setTimeout(() => schedulePulseRef.current(), step * secondsPerStep * 1000);
+  }, [midiBpm, midiClockSync, pulsePattern, pulseDepth, pulseSpeed, triggerPulseHit]);
+
+  useEffect(() => { schedulePulseRef.current = schedulePulse; }, [schedulePulse]);
 
   useEffect(() => {
     const graph = graphRef.current;
@@ -1063,7 +1264,7 @@ export default function DroneEnginePage() {
       if (graph.pulseTimer) { window.clearTimeout(graph.pulseTimer); graph.pulseTimer = null; }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pulsePattern, running]);
+  }, [pulsePattern, running, midiClockSync, midiBpm]);
 
   // ── Wander: slow macro drift across reverb / brightness / width ─
 
@@ -1089,20 +1290,20 @@ export default function DroneEnginePage() {
     const baseMidi = Math.round(12 * Math.log2(current.basePitch / 16.351));
     const octaveJump = Math.floor(mapping.degreeIndex / scale.length);
     const semitone = scale[mapping.degreeIndex % scale.length] + octaveJump * 12;
-    const frequency = freqForSemitone(baseMidi + semitone + mapping.octaveOffset);
+    const frequency = freqForSemitone(baseMidi + semitone + mapping.octaveOffset + keyboardTranspose);
     const now = graph.context.currentTime;
 
     const filter = graph.context.createBiquadFilter();
     filter.type = 'lowpass';
-    filter.frequency.value = 1800;
+    filter.frequency.value = 2800;
     filter.Q.value = 0.8;
     const panner = graph.context.createStereoPanner();
     panner.pan.value = (nextRandom() * 2 - 1) * 0.3;
     const gain = graph.context.createGain();
     gain.gain.setValueAtTime(0.0001, now);
-    // Soft, near-instant attack (still no click) — subtle peak level so a
-    // held chord never outweighs the generative drone underneath it.
-    gain.gain.exponentialRampToValueAtTime(0.16, now + 0.08);
+    // Bring the hand-played notes forward again: a quick, click-free attack
+    // and a fuller level make each key feel immediate above the drone.
+    gain.gain.exponentialRampToValueAtTime(0.34, now + 0.025);
 
     const oscillators: OscillatorNode[] = [];
     for (const detune of [-6, 6]) {
@@ -1111,15 +1312,24 @@ export default function DroneEnginePage() {
       osc.type = current.waveform;
       osc.frequency.value = frequency;
       osc.detune.value = detune;
-      oscGain.gain.value = 0.6;
+      oscGain.gain.value = 0.72;
       osc.connect(oscGain); oscGain.connect(filter); osc.start();
       oscillators.push(osc);
+    }
+    if (keyboardShine > 0) {
+      const shineOsc = graph.context.createOscillator();
+      const shineGain = graph.context.createGain();
+      shineOsc.type = 'sine';
+      shineOsc.frequency.value = frequency * 2;
+      shineGain.gain.value = keyboardShine / 100 * 0.18;
+      shineOsc.connect(shineGain); shineGain.connect(filter); shineOsc.start();
+      oscillators.push(shineOsc);
     }
     const subOsc = graph.context.createOscillator();
     const subGain = graph.context.createGain();
     subOsc.type = 'sine';
     subOsc.frequency.value = frequency / 2;
-    subGain.gain.value = 0.3;
+    subGain.gain.value = 0.36;
     subOsc.connect(subGain); subGain.connect(filter); subOsc.start();
 
     filter.connect(gain); gain.connect(panner);
@@ -1127,7 +1337,7 @@ export default function DroneEnginePage() {
 
     keyVoicesRef.current.set(key, { oscillators, subOsc, gain, filter, panner });
     setActiveKeys((previous) => ({ ...previous, [key]: true }));
-  }, [ensureAudio, nextRandom]);
+  }, [ensureAudio, keyboardShine, keyboardTranspose, nextRandom]);
 
   const releaseKey = useCallback((key: string) => {
     const graph = graphRef.current;
@@ -1137,7 +1347,7 @@ export default function DroneEnginePage() {
     if (!graph || !voice) return;
     const now = graph.context.currentTime;
     voice.gain.gain.cancelScheduledValues(now);
-    voice.gain.gain.setTargetAtTime(0, now, 0.5);
+    voice.gain.gain.setTargetAtTime(0, now, 0.7);
     window.setTimeout(() => {
       voice.oscillators.forEach((osc) => { try { osc.stop(); } catch {} });
       try { voice.subOsc.stop(); } catch {}
@@ -1146,6 +1356,136 @@ export default function DroneEnginePage() {
       try { voice.panner.disconnect(); } catch {}
     }, 1500);
   }, []);
+
+  // MIDI notes use the same Web Audio bus and long-tail treatment as keyboard
+  // notes, but retain their own identities so note-off messages can release
+  // exactly the voice that the DAW started (including per-channel notes).
+  const playMidiNote = useCallback(async (voiceKey: string, note: number, velocity: number) => {
+    if (midiVoicesRef.current.has(voiceKey)) return;
+    const graph = await ensureAudio();
+    const current = settingsRef.current;
+    const now = graph.context.currentTime;
+    const filter = graph.context.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 2800;
+    filter.Q.value = 0.8;
+    const panner = graph.context.createStereoPanner();
+    panner.pan.value = (nextRandom() * 2 - 1) * 0.3;
+    const gain = graph.context.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.1 + (velocity / 127) * 0.28, now + 0.025);
+    const frequency = 440 * Math.pow(2, (note - 69) / 12);
+    const oscillators: OscillatorNode[] = [];
+    for (const detune of [-6, 6]) {
+      const osc = graph.context.createOscillator();
+      const oscGain = graph.context.createGain();
+      osc.type = current.waveform;
+      osc.frequency.value = frequency;
+      osc.detune.value = detune;
+      oscGain.gain.value = 0.72;
+      osc.connect(oscGain); oscGain.connect(filter); osc.start();
+      oscillators.push(osc);
+    }
+    if (keyboardShine > 0) {
+      const shineOsc = graph.context.createOscillator();
+      const shineGain = graph.context.createGain();
+      shineOsc.type = 'sine';
+      shineOsc.frequency.value = frequency * 2;
+      shineGain.gain.value = keyboardShine / 100 * 0.18;
+      shineOsc.connect(shineGain); shineGain.connect(filter); shineOsc.start();
+      oscillators.push(shineOsc);
+    }
+    const subOsc = graph.context.createOscillator();
+    const subGain = graph.context.createGain();
+    subOsc.type = 'sine';
+    subOsc.frequency.value = frequency / 2;
+    subGain.gain.value = 0.36;
+    subOsc.connect(subGain); subGain.connect(filter); subOsc.start();
+    filter.connect(gain); gain.connect(panner);
+    panner.connect(graph.droneDry); panner.connect(graph.droneReverbPreDelay); panner.connect(graph.droneDelay);
+    midiVoicesRef.current.set(voiceKey, { oscillators, subOsc, gain, filter, panner });
+  }, [ensureAudio, keyboardShine, nextRandom]);
+
+  const releaseMidiNote = useCallback((voiceKey: string) => {
+    const graph = graphRef.current;
+    const voice = midiVoicesRef.current.get(voiceKey);
+    midiVoicesRef.current.delete(voiceKey);
+    if (!graph || !voice) return;
+    const now = graph.context.currentTime;
+    voice.gain.gain.cancelScheduledValues(now);
+    voice.gain.gain.setTargetAtTime(0, now, 0.7);
+    window.setTimeout(() => {
+      voice.oscillators.forEach((osc) => { try { osc.stop(); } catch {} });
+      try { voice.subOsc.stop(); } catch {}
+      try { voice.filter.disconnect(); } catch {}
+      try { voice.gain.disconnect(); } catch {}
+      try { voice.panner.disconnect(); } catch {}
+    }, 1500);
+  }, []);
+
+  const refreshMidiPorts = useCallback(async () => {
+    if (!isTauri()) {
+      setMidiStatus('MIDI input is available in the installed Hi Drone desktop app');
+      return;
+    }
+    try {
+      const ports = await invoke<MidiInputPort[]>('list_midi_inputs');
+      setMidiPorts(ports);
+      setMidiPortIndex((current) => current ?? ports[0]?.index ?? null);
+      setMidiStatus(ports.length ? `${ports.length} MIDI input${ports.length === 1 ? '' : 's'} found` : 'No MIDI inputs found');
+    } catch (error) {
+      setMidiStatus(`MIDI scan failed: ${String(error)}`);
+    }
+  }, []);
+
+  const connectMidi = useCallback(async () => {
+    if (midiPortIndex === null) { setMidiStatus('Choose a MIDI input first'); return; }
+    try {
+      setMidiStatus('Connecting…');
+      await invoke('connect_midi_input', { inputIndex: midiPortIndex });
+    } catch (error) {
+      setMidiStatus(`MIDI connection failed: ${String(error)}`);
+    }
+  }, [midiPortIndex]);
+
+  const disconnectMidi = useCallback(async () => {
+    try { await invoke('disconnect_midi_input'); } catch { /* native bridge may already be gone during app shutdown */ }
+    midiVoicesRef.current.forEach((_, key) => releaseMidiNote(key));
+    setMidiBpm(null);
+  }, [releaseMidiNote]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlistenMessage: (() => void) | undefined;
+    let unlistenStatus: (() => void) | undefined;
+    void listen<MidiMessage>('midi-message', ({ payload }) => {
+      if (payload.messageType === 'clock' && midiClockSyncRef.current) {
+        const now = performance.now();
+        const clock = midiClockRef.current;
+        if (clock.ticks === 0) clock.startedAt = now;
+        clock.ticks += 1;
+        if (clock.ticks >= 24) {
+          const bpm = 60_000 / (now - clock.startedAt);
+          if (bpm >= 20 && bpm <= 400) setMidiBpm(Math.round(bpm * 10) / 10);
+          clock.ticks = 0;
+          clock.startedAt = now;
+        }
+        return;
+      }
+      if (payload.note === null) return;
+      const voiceKey = `${payload.channel ?? 0}:${payload.note}`;
+      if (payload.messageType === 'noteOn') {
+        if (midiModeRef.current === 'trigger') void playMidiNote(voiceKey, payload.note, payload.velocity ?? 100);
+        if (midiModeRef.current === 'root') midiRootNoteRef.current = payload.note;
+      } else if (payload.messageType === 'noteOff') {
+        if (midiModeRef.current === 'trigger') releaseMidiNote(voiceKey);
+        if (midiModeRef.current === 'root' && midiRootNoteRef.current === payload.note) midiRootNoteRef.current = null;
+      }
+    }).then((unlisten) => { if (disposed) unlisten(); else unlistenMessage = unlisten; });
+    void listen<MidiStatus>('midi-status', ({ payload }) => setMidiStatus(payload.message)).then((unlisten) => { if (disposed) unlisten(); else unlistenStatus = unlisten; });
+    return () => { disposed = true; unlistenMessage?.(); unlistenStatus?.(); };
+  }, [playMidiNote, releaseMidiNote]);
 
   useEffect(() => {
     if (!keyboardPlayOn) return;
@@ -1161,12 +1501,22 @@ export default function DroneEnginePage() {
     const handleKeyUp = (event: KeyboardEvent) => {
       releaseKey(event.key.toLowerCase());
     };
+    const releaseAllKeys = () => {
+      Array.from(keyVoicesRef.current.keys()).forEach(releaseKey);
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) releaseAllKeys();
+    };
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', releaseAllKeys);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
-      Array.from(keyVoicesRef.current.keys()).forEach(releaseKey);
+      window.removeEventListener('blur', releaseAllKeys);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      releaseAllKeys();
     };
   }, [keyboardPlayOn, playKey, releaseKey]);
 
@@ -1225,6 +1575,146 @@ export default function DroneEnginePage() {
     draw();
     return () => window.cancelAnimationFrame(frame);
   }, [started]);
+
+  // The mastering display makes the final part of the signal chain tangible:
+  // the EQ curve is calculated from the actual Web Audio filters and the two
+  // gain-reduction meters read directly from their compressor nodes.
+  useEffect(() => {
+    if (!started) return;
+    const canvas = masteringCanvasRef.current;
+    if (!canvas) return;
+    const context2d = canvas.getContext('2d');
+    if (!context2d) return;
+    let frame = 0;
+    const draw = () => {
+      const graph = graphRef.current;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      const ratio = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.floor(width * ratio) || canvas.height !== Math.floor(height * ratio)) {
+        canvas.width = Math.floor(width * ratio);
+        canvas.height = Math.floor(height * ratio);
+      }
+      const canvasW = canvas.width;
+      const canvasH = canvas.height;
+      const pad = 18 * ratio;
+      const eqWidth = canvasW * 0.58;
+      const eqTop = 26 * ratio;
+      const eqBottom = canvasH - 18 * ratio;
+      const eqHeight = eqBottom - eqTop;
+      const midY = eqTop + eqHeight / 2;
+      context2d.clearRect(0, 0, canvasW, canvasH);
+      context2d.fillStyle = 'rgba(8, 8, 13, 0.65)';
+      context2d.fillRect(0, 0, canvasW, canvasH);
+
+      context2d.font = `${10 * ratio}px SF Mono, monospace`;
+      context2d.fillStyle = '#777789';
+      context2d.fillText('EQ CURVE', pad, 15 * ratio);
+      context2d.fillText('+12', 2 * ratio, eqTop + 4 * ratio);
+      context2d.fillText('0', 8 * ratio, midY + 4 * ratio);
+      context2d.fillText('−12', 2 * ratio, eqBottom);
+      context2d.strokeStyle = 'rgba(200, 200, 208, 0.13)';
+      context2d.lineWidth = ratio;
+      for (const level of [-12, 0, 12]) {
+        const y = midY - (level / 24) * eqHeight;
+        context2d.beginPath(); context2d.moveTo(pad, y); context2d.lineTo(eqWidth - pad, y); context2d.stroke();
+      }
+      for (const position of [0.1, 0.32, 0.56, 0.8]) {
+        const x = pad + (eqWidth - pad * 2) * position;
+        context2d.beginPath(); context2d.moveTo(x, eqTop); context2d.lineTo(x, eqBottom); context2d.stroke();
+      }
+      const points = 120;
+      const frequencies = new Float32Array(points);
+      const magnitude = new Float32Array(points);
+      const phase = new Float32Array(points);
+      for (let index = 0; index < points; index += 1) frequencies[index] = 30 * Math.pow(18000 / 30, index / (points - 1));
+      if (graph) {
+        const low = new Float32Array(points); const mid = new Float32Array(points); const high = new Float32Array(points);
+        graph.eqLow.getFrequencyResponse(frequencies, low, phase);
+        graph.eqMid.getFrequencyResponse(frequencies, mid, phase);
+        graph.eqHigh.getFrequencyResponse(frequencies, high, phase);
+        for (let index = 0; index < points; index += 1) magnitude[index] = low[index] * mid[index] * high[index];
+      } else {
+        magnitude.fill(1);
+      }
+      context2d.beginPath();
+      for (let index = 0; index < points; index += 1) {
+        const db = Math.max(-24, Math.min(24, 20 * Math.log10(Math.max(magnitude[index], 0.0001))));
+        const x = pad + (eqWidth - pad * 2) * (index / (points - 1));
+        const y = midY - (db / 24) * eqHeight;
+        if (index === 0) context2d.moveTo(x, y); else context2d.lineTo(x, y);
+      }
+      context2d.strokeStyle = '#8d7cff';
+      context2d.lineWidth = 2 * ratio;
+      context2d.shadowColor = 'rgba(108, 92, 231, 0.7)';
+      context2d.shadowBlur = 8 * ratio;
+      context2d.stroke();
+      context2d.shadowBlur = 0;
+      context2d.fillStyle = '#777789';
+      context2d.fillText('30 Hz', pad, canvasH - 3 * ratio);
+      context2d.fillText('1 kHz', eqWidth * 0.48, canvasH - 3 * ratio);
+      context2d.fillText('18 kHz', eqWidth - 48 * ratio, canvasH - 3 * ratio);
+
+      const meterLeft = eqWidth + 8 * ratio;
+      const meterWidth = canvasW - meterLeft - pad;
+      const drawReduction = (label: string, reduction: number, y: number, color: string) => {
+        const reductionDb = Math.max(0, -reduction);
+        const meterHeight = 13 * ratio;
+        const barY = y + 9 * ratio;
+        context2d.fillStyle = '#777789';
+        context2d.fillText(label, meterLeft, y);
+        context2d.fillStyle = '#c8c8d0';
+        context2d.textAlign = 'right';
+        context2d.fillText(`${reductionDb.toFixed(1)} dB GR`, canvasW - pad, y);
+        context2d.textAlign = 'left';
+        context2d.fillStyle = 'rgba(255,255,255,0.08)';
+        context2d.fillRect(meterLeft, barY, meterWidth, meterHeight);
+        const fill = Math.min(1, reductionDb / 24) * meterWidth;
+        context2d.fillStyle = color;
+        context2d.fillRect(meterLeft, barY, fill, meterHeight);
+      };
+      drawReduction('COMPRESSOR', graph?.compressor.reduction ?? 0, eqTop + 14 * ratio, '#00b894');
+      drawReduction('LIMITER', graph?.limiter.reduction ?? 0, eqTop + 72 * ratio, '#e17055');
+      context2d.font = `${9 * ratio}px SF Mono, monospace`;
+      context2d.fillStyle = '#5a5a68';
+      context2d.fillText('0', meterLeft, eqBottom);
+      context2d.textAlign = 'right'; context2d.fillText('24 dB', canvasW - pad, eqBottom); context2d.textAlign = 'left';
+      frame = window.requestAnimationFrame(draw);
+    };
+    draw();
+    return () => window.cancelAnimationFrame(frame);
+  }, [started, settings]);
+
+  useEffect(() => {
+    const canvas = sampleWaveformRef.current;
+    const graph = graphRef.current;
+    if (!canvas || !sampleLoaded || !graph?.sampleBuffer) return;
+    const context2d = canvas.getContext('2d');
+    if (!context2d) return;
+    const ratio = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    canvas.width = Math.floor(width * ratio);
+    canvas.height = Math.floor(height * ratio);
+    const canvasW = canvas.width;
+    const canvasH = canvas.height;
+    const data = graph.sampleBuffer.getChannelData(0);
+    const step = Math.max(1, Math.ceil(data.length / canvasW));
+    context2d.clearRect(0, 0, canvasW, canvasH);
+    context2d.fillStyle = 'rgba(108, 92, 231, 0.07)'; context2d.fillRect(0, 0, canvasW, canvasH);
+    context2d.strokeStyle = 'rgba(200, 200, 208, 0.12)'; context2d.beginPath(); context2d.moveTo(0, canvasH / 2); context2d.lineTo(canvasW, canvasH / 2); context2d.stroke();
+    context2d.strokeStyle = 'rgba(141, 124, 255, 0.78)'; context2d.lineWidth = ratio;
+    context2d.beginPath();
+    for (let x = 0; x < canvasW; x += 1) {
+      const start = x * step;
+      let min = 1; let max = -1;
+      for (let index = start; index < Math.min(start + step, data.length); index += 1) { min = Math.min(min, data[index]); max = Math.max(max, data[index]); }
+      context2d.moveTo(x, (1 + min) * canvasH / 2); context2d.lineTo(x, (1 + max) * canvasH / 2);
+    }
+    context2d.stroke();
+    const markerX = Math.min(canvasW - ratio, Math.max(0, samplePosition * canvasW));
+    context2d.fillStyle = '#e17055'; context2d.fillRect(markerX, 0, 2 * ratio, canvasH);
+  }, [sampleLoaded, samplePosition, vocalRenderStatus]);
 
   const onDropZoneDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1321,6 +1811,28 @@ export default function DroneEnginePage() {
                     <button className="btn btn-warm" type="button" style={{ padding: '6px 14px', fontSize: 11 }} onClick={removeSample}>Remove</button>
                   </div>
 
+                  <div className="vocal-alterer">
+                    <div className="vocal-alterer-head">
+                      <div><strong>Vocal Alterer</strong><span>AlterBoy-style voice shaping for this sample</span></div>
+                      <span className={vocalRenderStatus === 'Ready' ? 'vocal-status' : 'vocal-status processing'}>{vocalRenderStatus}</span>
+                    </div>
+                    <div className="vocal-controls">
+                      <div className="slider-group">
+                        <div className="slider-label"><span>Pitch — formant preserved</span><span>{vocalSettings.pitch > 0 ? '+' : ''}{vocalSettings.pitch} st</span></div>
+                        <input type="range" min="-12" max="12" step="1" value={vocalSettings.pitch} onChange={(event) => updateVocalSetting('pitch', Number(event.target.value))} />
+                      </div>
+                      <div className="slider-group">
+                        <div className="slider-label"><span>Formant character</span><span>{vocalSettings.formant > 0 ? '+' : ''}{vocalSettings.formant} st</span></div>
+                        <input type="range" min="-12" max="12" step="1" value={vocalSettings.formant} onChange={(event) => updateVocalSetting('formant', Number(event.target.value))} />
+                      </div>
+                      <div className="slider-group">
+                        <div className="slider-label"><span>Tube warmth</span><span>{vocalSettings.tube}%</span></div>
+                        <input type="range" min="0" max="100" step="1" value={vocalSettings.tube} onChange={(event) => updateVocalSetting('tube', Number(event.target.value))} />
+                      </div>
+                    </div>
+                    <div className="sample-help"><strong>Pitch</strong> re-renders the source with the formant-preserving processor, so voice shifts stay natural. <strong>Formant</strong> is a live vocal-color control: down is larger/darker, up is smaller/brighter. <strong>Tube</strong> adds soft saturation and warmth before your FX chain.</div>
+                  </div>
+
                   <div className="sample-grain-controls">
                     <div>
                       <div className="slider-group">
@@ -1352,13 +1864,43 @@ export default function DroneEnginePage() {
                     </div>
                   </div>
 
+                  <div
+                    className="sample-navigator"
+                    tabIndex={0}
+                    role="group"
+                    aria-label="Sample position navigator"
+                    onKeyDown={(event) => {
+                      if (event.key === 'ArrowLeft') { event.preventDefault(); moveSamplePosition(-0.05); }
+                      if (event.key === 'ArrowRight') { event.preventDefault(); moveSamplePosition(0.05); }
+                    }}
+                  >
+                    <div className="sample-navigator-head">
+                      <span>Sample position</span>
+                      <span>{formatDuration(samplePosition * sampleDuration)} / {formatDuration(sampleDuration)}</span>
+                    </div>
+                    <canvas ref={sampleWaveformRef} className="sample-waveform" aria-label="Waveform with selected playback position" />
+                    <div className="sample-navigator-controls">
+                      <button className="sample-arrow" type="button" onClick={() => moveSamplePosition(-0.05)} aria-label="Move sample position back 5 percent">←</button>
+                      <input aria-label="Sample position" type="range" min="0" max="100" step="1" value={Math.round(samplePosition * 100)} onChange={(event) => {
+                        const next = Number(event.target.value) / 100;
+                        samplePositionRef.current = next;
+                        granularPositionRef.current = next;
+                        setSamplePosition(next);
+                      }} onMouseUp={() => { if (sampleActive) { if (sampleMode === 'loop') startLoop(); else startGranular(); } }} onTouchEnd={() => { if (sampleActive) { if (sampleMode === 'loop') startLoop(); else startGranular(); } }} />
+                      <button className="sample-arrow" type="button" onClick={() => moveSamplePosition(0.05)} aria-label="Move sample position forward 5 percent">→</button>
+                    </div>
+                    <div className="sample-help">Use the arrows (or focus this panel and press ← / →) to move 5% through the file. Loop mode restarts from this point; granular mode draws new grains around it.</div>
+                  </div>
+
                   <div className="btn-row">
+                    <button className={`btn${sampleActive ? ' active' : ''}`} type="button" onClick={toggleSampleActive}>{sampleActive ? 'Sample On' : 'Sample Off'}</button>
                     <button className={`btn${sampleMode === 'granular' ? ' active' : ''}`} type="button" onClick={() => chooseSampleMode('granular')}>Granular Mode</button>
                     <button className={`btn${sampleMode === 'loop' ? ' active' : ''}`} type="button" onClick={() => chooseSampleMode('loop')}>Simple Loop Mode</button>
                     <button className={`btn${sampleThroughFx ? ' active' : ''}`} type="button" onClick={toggleSampleThroughFx}>Through FX Chain</button>
                   </div>
                   <div className="sample-help">
-                    <strong>Granular</strong>: chops audio into overlapping grains for evolving texture.{' '}
+                    <strong>Sample On/Off</strong>: mutes or resumes the uploaded sound without removing it.{' '}
+                    <strong>Granular</strong>: scans continuously through the entire file while chopping it into overlapping grains.{' '}
                     <strong>Loop</strong>: plays the sample as a continuous slowed-down loop.{' '}
                     <strong>Through FX</strong>: routes the sample through the reverb/delay/filter chain below.
                   </div>
@@ -1434,6 +1976,9 @@ export default function DroneEnginePage() {
 
             <div className="panel panel-full">
               <h3>Mastering</h3>
+              <div className="mastering-visualizer">
+                <canvas ref={masteringCanvasRef} aria-label="Live EQ curve, compressor reduction, and limiter reduction" />
+              </div>
               <div className="mastering-grid">
                 <div>
                   <div className="slider-label" style={{ marginBottom: 8 }}><span>EQ — 3-band, on the master bus</span></div>
@@ -1475,6 +2020,28 @@ export default function DroneEnginePage() {
             </div>
 
             <div className="panel panel-full">
+              <h3>Semi-Modular Signal Flow</h3>
+              <div className="patch-bay">
+                <svg className="patch-wires" viewBox="0 0 900 120" preserveAspectRatio="none" aria-hidden="true">
+                  <path className={patchCables.toneToMod ? 'patch-wire active' : 'patch-wire'} d="M145 48 C235 8, 360 8, 450 48" />
+                  <path className={patchCables.modToSpace ? 'patch-wire active' : 'patch-wire'} d="M450 48 C540 8, 665 8, 755 48" />
+                  <path className={patchCables.spaceToTone ? 'patch-wire warm active' : 'patch-wire warm'} d="M755 66 C625 118, 280 118, 145 66" />
+                </svg>
+                <div className="patch-nodes">
+                  <div className="patch-node"><strong>Tone</strong><span>Pitch sets modulation pace</span></div>
+                  <div className="patch-node"><strong>Modulation</strong><span>Depth blooms into delay</span></div>
+                  <div className="patch-node"><strong>Space</strong><span>Room can darken the tone</span></div>
+                </div>
+                <div className="patch-cable-row">
+                  <button className={`patch-cable${patchCables.toneToMod ? ' active' : ''}`} type="button" onClick={() => setPatchCables((current) => ({ ...current, toneToMod: !current.toneToMod }))}>Tone → Mod</button>
+                  <button className={`patch-cable${patchCables.modToSpace ? ' active' : ''}`} type="button" onClick={() => setPatchCables((current) => ({ ...current, modToSpace: !current.modToSpace }))}>Mod → Space</button>
+                  <button className={`patch-cable warm${patchCables.spaceToTone ? ' active' : ''}`} type="button" onClick={() => setPatchCables((current) => ({ ...current, spaceToTone: !current.spaceToTone }))}>Space → Tone</button>
+                </div>
+              </div>
+              <div className="sample-help">Click a cable to patch or unpatch it. Active cables are real: pitch shapes LFO pace, modulation depth opens the delay, and Space → Tone gently darkens the source as the room grows.</div>
+            </div>
+
+            <div className="panel panel-full">
               <h3>Scale &amp; Generation</h3>
               <div className="scale-row" style={{ marginBottom: 16 }}>
                 {(Object.keys(droneScales) as DroneScaleName[]).map((name) => (
@@ -1508,7 +2075,7 @@ export default function DroneEnginePage() {
                     <button type="button" className={`scale-btn${pulsePattern === 'sparse' ? ' active' : ''}`} onClick={() => setPulsePattern('sparse')}>Sparse</button>
                   </div>
                   <div className="slider-group">
-                    <div className="slider-label"><span>Pulse speed</span><span>{pulseSpeed.toFixed(1)} s/step</span></div>
+                    <div className="slider-label"><span>Pulse speed</span><span>{midiClockSync && midiBpm ? `${(60 / midiBpm).toFixed(2)} s/beat · ${midiBpm} BPM` : `${pulseSpeed.toFixed(1)} s/step`}</span></div>
                     <input type="range" min="0.5" max="4" step="0.1" value={pulseSpeed} onChange={(event) => setPulseSpeed(Number(event.target.value))} />
                   </div>
                   <div className="slider-group">
@@ -1538,8 +2105,18 @@ export default function DroneEnginePage() {
               <div className="btn-row" style={{ marginBottom: 12 }}>
                 <button type="button" className={`btn${keyboardPlayOn ? ' active' : ''}`} onClick={() => setKeyboardPlayOn((previous) => !previous)}>{keyboardPlayOn ? 'Keyboard On' : 'Keyboard Off'}</button>
               </div>
+              <div className="keyboard-controls">
+                <div className="slider-group">
+                  <div className="slider-label"><span>Musical transpose</span><span>{keyboardTranspose > 0 ? '+' : ''}{keyboardTranspose} st</span></div>
+                  <input type="range" min="-12" max="12" step="1" value={keyboardTranspose} onChange={(event) => setKeyboardTranspose(Number(event.target.value))} />
+                </div>
+                <div className="slider-group">
+                  <div className="slider-label"><span>Octave shine</span><span>{keyboardShine}%</span></div>
+                  <input type="range" min="0" max="100" step="1" value={keyboardShine} onChange={(event) => setKeyboardShine(Number(event.target.value))} />
+                </div>
+              </div>
               <div className="sample-help">
-                Play soft, in-scale notes by hand — they stay locked to the current scale and blend into the same room as everything else. <strong>A S D F G H J K L</strong> for the lower octave, <strong>W E R T Y U I O P</strong> for the octave above. Keys also work as buttons below.
+                Play soft, in-scale notes by hand — they stay locked to the current scale and blend into the same room as everything else. Transpose moves every key together in semitones; Octave shine adds a gentle musical overtone. <strong>A S D F G H J K L</strong> for the lower octave, <strong>W E R T Y U I O P</strong> for the octave above. Keys also work as buttons below.
               </div>
               <div className="keyboard-rows">
                 <div className="keyboard-row keyboard-row-upper">
@@ -1572,6 +2149,36 @@ export default function DroneEnginePage() {
                     </span>
                   ))}
                 </div>
+              </div>
+            </div>
+
+            <div className="panel panel-full">
+              <h3>MIDI Input</h3>
+              <div className="midi-controls">
+                <div className="btn-row">
+                  <button type="button" className="btn" onClick={() => { void refreshMidiPorts(); }}>Refresh Inputs</button>
+                  <select aria-label="MIDI input port" value={midiPortIndex ?? ''} onChange={(event) => setMidiPortIndex(event.target.value === '' ? null : Number(event.target.value))}>
+                    <option value="">Choose MIDI input…</option>
+                    {midiPorts.map((port) => <option key={port.index} value={port.index}>{port.name}</option>)}
+                  </select>
+                  <button type="button" className="btn active" disabled={midiPortIndex === null} onClick={() => { void connectMidi(); }}>Connect</button>
+                  <button type="button" className="btn" onClick={() => { void disconnectMidi(); }}>Disconnect</button>
+                </div>
+                <div className="midi-status">{midiStatus}</div>
+                <div className="slider-label" style={{ marginTop: 16, marginBottom: 8 }}><span>Notes</span></div>
+                <div className="scale-row">
+                  <button type="button" className={`scale-btn${midiMode === 'off' ? ' active' : ''}`} onClick={() => setMidiMode('off')}>Ignore notes</button>
+                  <button type="button" className={`scale-btn${midiMode === 'trigger' ? ' active' : ''}`} onClick={() => setMidiMode('trigger')}>Trigger voices</button>
+                  <button type="button" className={`scale-btn${midiMode === 'root' ? ' active' : ''}`} onClick={() => setMidiMode('root')}>Set drone root</button>
+                </div>
+                <div className="btn-row" style={{ marginTop: 16 }}>
+                  <button type="button" className={`btn${midiClockSync ? ' active' : ''}`} onClick={() => { setMidiClockSync((current) => !current); midiClockRef.current = { ticks: 0, startedAt: 0 }; setMidiBpm(null); }}>
+                    {midiClockSync ? `Clock Sync On${midiBpm ? ` · ${midiBpm} BPM` : ''}` : 'Clock Sync Off'}
+                  </button>
+                </div>
+              </div>
+              <div className="sample-help">
+                Hi Drone remains self-generating with no MIDI connected. Trigger voices follows note-on/note-off and velocity; Set drone root makes a held MIDI note the root of new generated voices. Clock Sync makes the Pulse follow MIDI clock (24 PPQN) from Ableton, Logic, or another DAW.
               </div>
             </div>
           </div>
