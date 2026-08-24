@@ -205,6 +205,92 @@ canvas {
   grid-column: 1 / -1;
 }
 
+/* ── PERFORMANCE ── */
+.performance-panel {
+  background: linear-gradient(135deg, rgba(108, 92, 231, 0.11), rgba(17, 17, 24, 0.96) 55%);
+}
+
+.performance-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.performance-heading h3 { margin-bottom: 4px; }
+.performance-heading span { color: var(--text-dim); font-size: 11px; }
+.freeze-btn { white-space: nowrap; }
+
+.macro-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+
+.macro-control {
+  min-height: 106px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid rgba(108, 92, 231, 0.25);
+  border-radius: 8px;
+  background: rgba(8, 8, 14, 0.4);
+}
+
+.macro-control > span {
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+.macro-control strong { color: #dedbff; font: 18px Georgia, serif; }
+.macro-control input { margin-top: auto; }
+.macro-control small { color: var(--text-dim); font-size: 9px; line-height: 1.3; }
+
+.scene-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 16px 0 12px;
+}
+
+.scene-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.scene-slot.stored { border-color: rgba(108, 92, 231, 0.55); }
+.scene-slot > span { color: var(--text-dim); font: 10px 'SF Mono', monospace; text-transform: uppercase; }
+.scene-slot .btn { padding: 6px 10px; font-size: 10px; }
+
+.morph-time {
+  min-width: 150px;
+  flex: 1;
+  padding: 4px 8px;
+}
+
+.morph-time span { color: var(--text-dim); font-size: 10px; }
+.morph-time strong { float: right; color: var(--accent); font: 10px 'SF Mono', monospace; }
+.morph-time input { display: block; width: 100%; margin-top: 10px; }
+
+@media (max-width: 760px) {
+  .macro-grid { grid-template-columns: repeat(2, 1fr); }
+  .gravity-control { grid-column: 1 / -1; }
+}
+
+@media (max-width: 460px) {
+  .performance-heading { align-items: flex-start; flex-direction: column; }
+  .scene-slot { width: 100%; }
+}
+
 /* ── SLIDERS ── */
 .slider-group {
   margin-bottom: 18px;

@@ -12,6 +12,10 @@ type ModulationShape = 'sine' | 'random';
 type NoiseColor = 'brown' | 'pink' | 'white';
 type SampleMode = 'granular' | 'loop';
 type PulsePattern = 'off' | 'steady' | 'doom' | 'sparse';
+type TechnoPresetName = 'classic' | 'detroit' | 'hardgroove' | 'rumble' | 'broken';
+type TechnoSettings = { bpm: number; hatDensity: number; snareDensity: number; tomActivity: number; evolveBars: number; volume: number; hatPulses: number; snarePulses: number; tomPulses: number; humanize: number; swing: number; kickMode: 'four' | 'broken' };
+type TechnoPattern = { kicks: Set<number>; hats: Set<number>; snares: Set<number>; ghostSnares: Set<number>; toms: Set<number>; hatChance: number };
+type MelodySettings = { enabled: boolean; root: number; density: number; evolveBars: number; brightness: number; volume: number; duck: boolean; duckDepth: number; duckRelease: number; tranceGate: boolean; gateDepth: number; gatePattern: 'quarter' | 'eighth' | 'sixteenth' | 'pulse' };
 type DroneSettings = { basePitch: number; detuneCents: number; oscCount: number; waveform: OscillatorType; modulationShape: ModulationShape; filterRate: number; filterDepth: number; pitchDrift: number; volLfoDepth: number; panDepth: number; noiseColor: NoiseColor; noiseAmount: number; reverbAmount: number; delayAmount: number; delayTime: number; delayFeedback: number; chorusAmount: number; driveAmount: number; masterVolume: number; scale: DroneScaleName; genSpeed: number; maxVoices: number; eqLowGain: number; eqMidGain: number; eqHighGain: number; compThreshold: number; compRatio: number; limiterCeiling: number };
 type DroneVoiceNode = { noteName: string; semitone: number; oscillators: Array<{ osc: OscillatorNode; gain: GainNode }>; subOsc: OscillatorNode; subGain: GainNode; airOsc: OscillatorNode; airGain: GainNode; voiceGain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode; filterLfo: OscillatorNode; filterLfoGain: GainNode; pitchLfo: OscillatorNode; pitchLfoGain: GainNode; volLfo: OscillatorNode; volLfoGain: GainNode; panLfo: OscillatorNode; panLfoGain: GainNode; randomInterval: number | null };
 type SampleSettings = { grainRate: number; grainPitch: number; grainVolume: number; grainSize: number; grainDrift: number; grainDensity: number };
@@ -22,10 +26,19 @@ type MidiInputPort = { index: number; name: string };
 type MidiMessage = { messageType: 'noteOn' | 'noteOff' | 'clock' | 'start' | 'continue' | 'stop'; channel: number | null; note: number | null; velocity: number | null };
 type MidiStatus = { state: 'connected' | 'disconnected' | 'error'; message: string };
 type LiveVoice = { oscillators: OscillatorNode[]; subOsc: OscillatorNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode };
+type PerformanceMacros = { bloom: number; weight: number; motion: number; distance: number };
+type FrozenVoice = LiveVoice;
+type PerformanceScene = {
+  settings: DroneSettings; macros: PerformanceMacros; harmonicGravity: number;
+  pulsePattern: PulsePattern; pulseSpeed: number; pulseDepth: number;
+  wanderOn: boolean; wanderSpeed: number; wanderDepth: number;
+  patchCables: PatchCables; sampleSettings: SampleSettings; sampleMode: SampleMode; sampleThroughFx: boolean;
+};
 type Graph = {
   context: AudioContext; master: GainNode; toneHigh: BiquadFilterNode; toneLow: BiquadFilterNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode;
   eqLow: BiquadFilterNode; eqMid: BiquadFilterNode; eqHigh: BiquadFilterNode; limiter: DynamicsCompressorNode;
   droneMaster: GainNode; droneBus: GainNode; droneDrive: WaveShaperNode; droneChorusDry: GainNode; droneChorusDelay: DelayNode; droneChorusWet: GainNode; droneChorusLfo: OscillatorNode; droneChorusDepth: GainNode;
+  technoGain: GainNode; melodyGain: GainNode; melodyDuckGain: GainNode; melodyGateGain: GainNode; rumbleSend: GainNode; rumbleReverb: ConvolverNode; rumbleFilter: BiquadFilterNode; rumbleGain: GainNode;
   droneDry: GainNode; droneReverb: ConvolverNode; droneReverbPreDelay: DelayNode; droneReverbWet: GainNode;
   droneDelay: DelayNode; droneDelayFilter: BiquadFilterNode; droneDelayFeedback: GainNode; droneDelayWet: GainNode;
   droneNoise: AudioBufferSourceNode; droneNoiseFilter: BiquadFilterNode; droneNoiseGain: GainNode;
@@ -67,6 +80,17 @@ const defaultDroneSettings: DroneSettings = {
 };
 const defaultSampleSettings: SampleSettings = { grainRate: 0.5, grainPitch: -12, grainVolume: 0.6, grainSize: 2.0, grainDrift: 0.3, grainDensity: 4 };
 const defaultVocalSettings: VocalSettings = { pitch: 0, formant: 0, tube: 0 };
+const defaultPerformanceMacros: PerformanceMacros = { bloom: 0, weight: 0, motion: 0, distance: 0 };
+const defaultTechnoSettings: TechnoSettings = { bpm: 132, hatDensity: 68, snareDensity: 32, tomActivity: 34, evolveBars: 8, volume: 42, hatPulses: 9, snarePulses: 1, tomPulses: 2, humanize: 9, swing: 0, kickMode: 'four' };
+const defaultMelodySettings: MelodySettings = { enabled: true, root: 50, density: 48, evolveBars: 8, brightness: 36, volume: 32, duck: false, duckDepth: 62, duckRelease: 220, tranceGate: false, gateDepth: 88, gatePattern: 'eighth' };
+const clamp = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
+const lerp = (from: number, to: number, amount: number) => from + (to - from) * amount;
+// Evenly distributes a number of pulses around a step grid. This compact
+// modular form is equivalent to a Euclidean rhythm for our 16-step machine.
+const euclideanSteps = (pulses: number, steps = 16, rotation = 0) => {
+  const count = clamp(Math.round(pulses), 0, steps);
+  return new Set(Array.from({ length: steps }, (_, step) => step).filter((step) => (((step - rotation + steps) % steps) * count) % steps < count));
+};
 const MIC_MAX_SECONDS = 60;
 // Overall level for uploaded/recorded Audio Input playback. Was 0.4 — far
 // too conservative next to grain envelope peaks that were already quiet,
@@ -194,6 +218,15 @@ export default function DroneEnginePage() {
   const [pulseSpeed, setPulseSpeed] = useState(1.4);
   const [pulseDepth, setPulseDepth] = useState(50);
 
+  // Minimal Machine: the kick is deliberately invariant; all movement is
+  // confined to the smaller voices so the rhythm stays hypnotic.
+  const [technoSettings, setTechnoSettings] = useState<TechnoSettings>(defaultTechnoSettings);
+  const [technoPreset, setTechnoPreset] = useState<TechnoPresetName | 'mix'>('classic');
+  const [melodySettings, setMelodySettings] = useState<MelodySettings>(defaultMelodySettings);
+  const [melodyEvolution, setMelodyEvolution] = useState(0);
+  const [technoPlaying, setTechnoPlaying] = useState(false);
+  const [technoEvolution, setTechnoEvolution] = useState(0);
+
   // Wander: a very slow macro drift across reverb/brightness/width, so the
   // room keeps slowly moving through its own space instead of settling.
   const [wanderOn, setWanderOn] = useState(false);
@@ -213,7 +246,15 @@ export default function DroneEnginePage() {
   const [midiMode, setMidiMode] = useState<MidiMode>('off');
   const [midiClockSync, setMidiClockSync] = useState(false);
   const [midiBpm, setMidiBpm] = useState<number | null>(null);
+  const [midiRootNote, setMidiRootNote] = useState<number | null>(null);
   const [patchCables, setPatchCables] = useState<PatchCables>({ toneToMod: true, modToSpace: true, spaceToTone: false });
+  const [macros, setMacros] = useState<PerformanceMacros>(defaultPerformanceMacros);
+  const [harmonicGravity, setHarmonicGravity] = useState(50);
+  const [freezeActive, setFreezeActive] = useState(false);
+  const [scenes, setScenes] = useState<{ a: PerformanceScene | null; b: PerformanceScene | null }>({ a: null, b: null });
+  const [morphSeconds, setMorphSeconds] = useState(45);
+  const [morphTarget, setMorphTarget] = useState<'a' | 'b' | null>(null);
+  const [morphProgress, setMorphProgress] = useState(0);
 
   const graphRef = useRef<Graph | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -226,6 +267,7 @@ export default function DroneEnginePage() {
   const sampleActiveRef = useRef(sampleActive);
   const scheduleNextGrainRef = useRef<() => void>(() => {});
   const schedulePulseRef = useRef<() => void>(() => {});
+  const scheduleTechnoStepRef = useRef<() => void>(() => {});
   const vocalRenderVersionRef = useRef(0);
   const runningRef = useRef(false);
   const pausedRef = useRef(false);
@@ -238,7 +280,20 @@ export default function DroneEnginePage() {
   const midiModeRef = useRef<MidiMode>(midiMode);
   const midiClockSyncRef = useRef(midiClockSync);
   const midiRootNoteRef = useRef<number | null>(null);
+  const midiHeldRootsRef = useRef<Map<string, number>>(new Map());
+  const technoSettingsRef = useRef(technoSettings);
+  const melodySettingsRef = useRef(melodySettings);
+  const technoPlayingRef = useRef(technoPlaying);
+  const technoTimerRef = useRef<number | null>(null);
+  const technoStepRef = useRef(0);
+  const technoBarRef = useRef(0);
+  const technoPatternRef = useRef<TechnoPattern>({ kicks: euclideanSteps(4), hats: euclideanSteps(defaultTechnoSettings.hatPulses), snares: euclideanSteps(defaultTechnoSettings.snarePulses, 16, 12), ghostSnares: new Set(), toms: new Set(), hatChance: 0.68 });
+  const melodyPhraseRef = useRef<Array<number | null>>(Array(16).fill(null));
   const midiClockRef = useRef({ ticks: 0, startedAt: 0 });
+  const frozenVoicesRef = useRef<Map<number, FrozenVoice>>(new Map());
+  const frozenVoiceIdRef = useRef(0);
+  const morphTimerRef = useRef<number | null>(null);
+  const morphVersionRef = useRef(0);
 
   const recordedLeftRef = useRef<Float32Array[]>([]);
   const recordedRightRef = useRef<Float32Array[]>([]);
@@ -253,10 +308,16 @@ export default function DroneEnginePage() {
   const micStopRef = useRef<() => void>(() => {});
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
+  useEffect(() => { technoSettingsRef.current = technoSettings; }, [technoSettings]);
+  useEffect(() => { melodySettingsRef.current = melodySettings; }, [melodySettings]);
+  useEffect(() => { technoPlayingRef.current = technoPlaying; }, [technoPlaying]);
   useEffect(() => { sampleSettingsRef.current = sampleSettings; }, [sampleSettings]);
   useEffect(() => { samplePositionRef.current = samplePosition; }, [samplePosition]);
   useEffect(() => { sampleActiveRef.current = sampleActive; }, [sampleActive]);
-  useEffect(() => { midiModeRef.current = midiMode; if (midiMode !== 'root') midiRootNoteRef.current = null; }, [midiMode]);
+  useEffect(() => {
+    midiModeRef.current = midiMode;
+    if (midiMode !== 'root') { midiRootNoteRef.current = null; midiHeldRootsRef.current.clear(); }
+  }, [midiMode]);
   useEffect(() => { midiClockSyncRef.current = midiClockSync; }, [midiClockSync]);
   useEffect(() => { seedRef.current = Math.floor(Math.random() * 100000); }, []);
 
@@ -280,6 +341,14 @@ export default function DroneEnginePage() {
     const analyser = context.createAnalyser();
     const droneMaster = context.createGain();
     const droneBus = context.createGain();
+    const technoGain = context.createGain();
+    const melodyGain = context.createGain();
+    const melodyDuckGain = context.createGain();
+    const melodyGateGain = context.createGain();
+    const rumbleSend = context.createGain();
+    const rumbleReverb = createDroneReverb(context, 2.7);
+    const rumbleFilter = context.createBiquadFilter();
+    const rumbleGain = context.createGain();
     const droneDrive = context.createWaveShaper();
     const droneChorusDry = context.createGain();
     const droneChorusDelay = context.createDelay(0.05);
@@ -347,6 +416,15 @@ export default function DroneEnginePage() {
     analyser.smoothingTimeConstant = 0.85;
     droneDry.gain.value = 1 - defaultDroneSettings.reverbAmount * 0.5;
     droneMaster.gain.value = defaultDroneSettings.masterVolume;
+    technoGain.gain.value = defaultTechnoSettings.volume / 100;
+    melodyGain.gain.value = defaultMelodySettings.volume / 100;
+    melodyDuckGain.gain.value = 1;
+    melodyGateGain.gain.value = 1;
+    rumbleSend.gain.value = 0.72;
+    rumbleFilter.type = 'lowpass';
+    rumbleFilter.frequency.value = 185;
+    rumbleFilter.Q.value = 0.8;
+    rumbleGain.gain.value = 0;
     droneDrive.curve = createDriveCurve(defaultDroneSettings.driveAmount);
     droneDrive.oversample = '2x';
     droneChorusDry.gain.value = 1 - defaultDroneSettings.chorusAmount * 0.35;
@@ -443,6 +521,14 @@ export default function DroneEnginePage() {
     limiter.connect(analyser);
     analyser.connect(context.destination);
     droneDry.connect(droneBus);
+    technoGain.connect(droneBus);
+    melodyGain.connect(melodyDuckGain);
+    melodyDuckGain.connect(melodyGateGain);
+    melodyGateGain.connect(droneBus);
+    rumbleSend.connect(rumbleReverb);
+    rumbleReverb.connect(rumbleFilter);
+    rumbleFilter.connect(rumbleGain);
+    rumbleGain.connect(droneBus);
     droneReverbPreDelay.connect(droneReverb);
     droneReverb.connect(droneReverbWet);
     droneReverbWet.connect(droneBus);
@@ -458,7 +544,7 @@ export default function DroneEnginePage() {
     droneMaster.connect(master);
 
     graphRef.current = {
-      context, master, toneHigh, toneLow, compressor, analyser, eqLow, eqMid, eqHigh, limiter, droneMaster, droneBus, droneDrive, droneChorusDry, droneChorusDelay, droneChorusWet, droneChorusLfo, droneChorusDepth,
+      context, master, toneHigh, toneLow, compressor, analyser, eqLow, eqMid, eqHigh, limiter, droneMaster, droneBus, droneDrive, droneChorusDry, droneChorusDelay, droneChorusWet, droneChorusLfo, droneChorusDepth, technoGain, melodyGain, melodyDuckGain, melodyGateGain, rumbleSend, rumbleReverb, rumbleFilter, rumbleGain,
       droneDry, droneReverb, droneReverbPreDelay, droneReverbWet, droneDelay, droneDelayFilter, droneDelayFeedback, droneDelayWet, droneNoise, droneNoiseFilter, droneNoiseGain,
       droneVoices: new Map(),
       sampleGain, sampleFilter, sampleFormantFilters, sampleTubeDrive, sampleTubeTone, sampleBuffer: null, sampleOriginalBuffer: null, loopSource: null, granularTimer: null,
@@ -600,9 +686,11 @@ export default function DroneEnginePage() {
       return;
     }
     const scale = droneScales[current.scale].intervals;
-    // In Root Pitch mode a held MIDI note becomes the root for the autonomous
-    // generator. Otherwise the panel's base-pitch control remains authoritative.
-    const baseMidi = midiRootNoteRef.current ?? Math.round(12 * Math.log2(current.basePitch / 16.351));
+    const heldRoot = midiRootNoteRef.current;
+    // A held root only redirects the generator when Harmonic Gravity asks it
+    // to; at zero, the autonomous system remains completely self-directed.
+    const gravity = heldRoot === null ? 0 : harmonicGravity / 100;
+    const baseMidi = heldRoot !== null && gravity > 0 ? heldRoot : Math.round(12 * Math.log2(current.basePitch / 16.351));
     // Every scale tone the engine is allowed to speak, across the working register
     const candidates: number[] = [];
     for (let octave = 0; octave < 3; octave += 1) {
@@ -614,7 +702,11 @@ export default function DroneEnginePage() {
     }
     const activeVoices = graph ? Array.from(graph.droneVoices.values()) : [];
     let totalSemitones: number;
-    if (activeVoices.length > 0 && nextRandom() < 0.42) {
+    if (heldRoot !== null && nextRandom() < gravity) {
+      const rootRelations = [-24, -19, -17, -12, -9, -8, -7, -5, -4, -3, 0, 3, 4, 5, 7, 8, 9, 12, 17, 19, 24];
+      const target = heldRoot + rootRelations[Math.floor(nextRandom() * rootRelations.length)];
+      totalSemitones = candidates.reduce((best, candidate) => (Math.abs(candidate - target) < Math.abs(best - target) ? candidate : best), candidates[0]);
+    } else if (activeVoices.length > 0 && nextRandom() < 0.42) {
       // Consonance-aware path: anchor to a sounding voice and snap to a
       // nearby scale tone at a consonant interval (octave, fifth, fourth, third)
       const anchor = activeVoices[Math.floor(nextRandom() * activeVoices.length)].semitone;
@@ -635,7 +727,7 @@ export default function DroneEnginePage() {
       const primeMultiplier = 0.7 + (dronePrimes[Math.floor(nextRandom() * 6)] / dronePrimes[6]) * 0.6;
       generationTimerRef.current = window.setTimeout(() => generateNoteRef.current(), current.genSpeed * primeMultiplier * 1000);
     }
-  }, [createVoice, nextRandom]);
+  }, [createVoice, harmonicGravity, nextRandom]);
 
   useEffect(() => { generateNoteRef.current = () => { void generateNote(); }; }, [generateNote]);
 
@@ -672,6 +764,172 @@ export default function DroneEnginePage() {
     }
   }, [generateNote, stopAllVoices]);
 
+  const releaseFreeze = useCallback(() => {
+    const graph = graphRef.current;
+    if (!graph || frozenVoicesRef.current.size === 0) { setFreezeActive(false); return; }
+    const now = graph.context.currentTime;
+    frozenVoicesRef.current.forEach((voice) => {
+      voice.gain.gain.cancelScheduledValues(now);
+      voice.gain.gain.setTargetAtTime(0.0001, now, 1.2);
+      window.setTimeout(() => {
+        voice.oscillators.forEach((osc) => { try { osc.stop(); } catch {} });
+        try { voice.subOsc.stop(); } catch {}
+        try { voice.filter.disconnect(); } catch {}
+        try { voice.gain.disconnect(); } catch {}
+        try { voice.panner.disconnect(); } catch {}
+      }, 5200);
+    });
+    frozenVoicesRef.current.clear();
+    setFreezeActive(false);
+  }, []);
+
+  const dissolveGeneratedWorld = useCallback((seconds = 4) => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    const now = graph.context.currentTime;
+    const voices = Array.from(graph.droneVoices.entries());
+    voices.forEach(([id, voice]) => {
+      voice.voiceGain.gain.cancelScheduledValues(now);
+      // A long exponential fade makes the outgoing world feel like it is
+      // receding into the same room rather than being abruptly stopped.
+      voice.voiceGain.gain.setTargetAtTime(0.0001, now, seconds / 4.7);
+      if (voice.randomInterval) window.clearInterval(voice.randomInterval);
+      window.setTimeout(() => {
+        voice.oscillators.forEach(({ osc }) => { try { osc.stop(); } catch {} });
+        try { voice.subOsc.stop(); } catch {}
+        try { voice.airOsc.stop(); } catch {}
+        try { voice.filterLfo.stop(); } catch {}
+        try { voice.pitchLfo.stop(); } catch {}
+        try { voice.volLfo.stop(); } catch {}
+        try { voice.panLfo.stop(); } catch {}
+      }, (seconds + 0.35) * 1000);
+      graph.droneVoices.delete(id);
+    });
+    setVoiceCount(0);
+    setNotes([]);
+  }, []);
+
+  const newWorld = useCallback(() => {
+    seedRef.current = Math.floor(Math.random() * 0xffffffff);
+    if (generationTimerRef.current) window.clearTimeout(generationTimerRef.current);
+    generationTimerRef.current = null;
+    dissolveGeneratedWorld();
+    releaseFreeze();
+    const graph = graphRef.current;
+    if (graph) {
+      if (graph.pulseTimer) window.clearTimeout(graph.pulseTimer);
+      graph.pulseTimer = null;
+      graph.pulseStep = Math.floor(nextRandom() * 8);
+    }
+    if (runningRef.current && !pausedRef.current) {
+      window.setTimeout(() => generateNoteRef.current(), 140);
+      window.setTimeout(() => generateNoteRef.current(), 1650);
+    }
+  }, [dissolveGeneratedWorld, nextRandom, releaseFreeze]);
+
+  const captureFreeze = useCallback(async () => {
+    const graph = await ensureAudio();
+    const sourceVoices = Array.from(graph.droneVoices.values());
+    if (!sourceVoices.length) return;
+    releaseFreeze();
+    const current = settingsRef.current;
+    const now = graph.context.currentTime;
+    // Rebuild a calm, phase-independent copy of the current harmony. It is
+    // intentionally a new layer, so the original evolving voices retain their
+    // natural lifetimes and the generator can keep moving around the capture.
+    const uniqueSemitones = Array.from(new Set(sourceVoices.map((voice) => voice.semitone))).slice(0, 6);
+    uniqueSemitones.forEach((semitone, index) => {
+      const frequency = freqForSemitone(semitone);
+      const filter = graph.context.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 1500 + index * 180;
+      filter.Q.value = 0.7;
+      const panner = graph.context.createStereoPanner();
+      panner.pan.value = uniqueSemitones.length > 1 ? (index / (uniqueSemitones.length - 1) - 0.5) * 0.42 : 0;
+      const gain = graph.context.createGain();
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.setTargetAtTime(0.11 / Math.sqrt(uniqueSemitones.length), now, 0.48);
+      const oscillators: OscillatorNode[] = [];
+      for (const detune of [-current.detuneCents * 0.45, current.detuneCents * 0.45]) {
+        const osc = graph.context.createOscillator();
+        const oscGain = graph.context.createGain();
+        osc.type = current.waveform;
+        osc.frequency.value = frequency;
+        osc.detune.value = detune;
+        oscGain.gain.value = 0.45;
+        osc.connect(oscGain); oscGain.connect(filter); osc.start();
+        oscillators.push(osc);
+      }
+      const subOsc = graph.context.createOscillator();
+      const subGain = graph.context.createGain();
+      subOsc.type = 'sine';
+      subOsc.frequency.value = frequency / 2;
+      subGain.gain.value = 0.22;
+      subOsc.connect(subGain); subGain.connect(filter); subOsc.start();
+      filter.connect(gain); gain.connect(panner);
+      panner.connect(graph.droneDry); panner.connect(graph.droneReverbPreDelay); panner.connect(graph.droneDelay);
+      frozenVoicesRef.current.set(frozenVoiceIdRef.current += 1, { oscillators, subOsc, gain, filter, panner });
+    });
+    setFreezeActive(true);
+  }, [ensureAudio, releaseFreeze]);
+
+  const currentScene = useCallback((): PerformanceScene => ({
+    settings: { ...settings }, macros: { ...macros }, harmonicGravity,
+    pulsePattern, pulseSpeed, pulseDepth, wanderOn, wanderSpeed, wanderDepth,
+    patchCables: { ...patchCables }, sampleSettings: { ...sampleSettings }, sampleMode, sampleThroughFx,
+  }), [harmonicGravity, macros, patchCables, pulseDepth, pulsePattern, pulseSpeed, sampleMode, sampleSettings, sampleThroughFx, settings, wanderDepth, wanderOn, wanderSpeed]);
+
+  const stopMorph = useCallback(() => {
+    morphVersionRef.current += 1;
+    if (morphTimerRef.current) window.clearTimeout(morphTimerRef.current);
+    morphTimerRef.current = null;
+    setMorphTarget(null);
+    setMorphProgress(0);
+  }, []);
+
+  const applyScene = useCallback((scene: PerformanceScene) => {
+    setSettings(scene.settings); setMacros(scene.macros); setHarmonicGravity(scene.harmonicGravity);
+    setPulsePattern(scene.pulsePattern); setPulseSpeed(scene.pulseSpeed); setPulseDepth(scene.pulseDepth);
+    setWanderOn(scene.wanderOn); setWanderSpeed(scene.wanderSpeed); setWanderDepth(scene.wanderDepth);
+    setPatchCables(scene.patchCables); setSampleSettings(scene.sampleSettings); setSampleMode(scene.sampleMode); setSampleThroughFx(scene.sampleThroughFx);
+  }, []);
+
+  const captureScene = useCallback((slot: 'a' | 'b') => {
+    stopMorph();
+    setScenes((previous) => ({ ...previous, [slot]: currentScene() }));
+  }, [currentScene, stopMorph]);
+
+  const morphToScene = useCallback((slot: 'a' | 'b') => {
+    const target = scenes[slot];
+    if (!target) return;
+    stopMorph();
+    const source = currentScene();
+    const version = morphVersionRef.current + 1;
+    morphVersionRef.current = version;
+    const startedAt = performance.now();
+    setMorphTarget(slot);
+    const tick = () => {
+      if (version !== morphVersionRef.current) return;
+      const amount = clamp((performance.now() - startedAt) / (morphSeconds * 1000), 0, 1);
+      const interpolatedSettings = Object.fromEntries(Object.entries(source.settings).map(([key, value]) => {
+        if (typeof value !== 'number') return [key, amount < 1 ? value : target.settings[key as keyof DroneSettings]];
+        const next = lerp(value, target.settings[key as keyof DroneSettings] as number, amount);
+        return [key, key === 'oscCount' || key === 'maxVoices' ? Math.round(next) : next];
+      })) as DroneSettings;
+      setSettings(interpolatedSettings);
+      setMacros({ bloom: lerp(source.macros.bloom, target.macros.bloom, amount), weight: lerp(source.macros.weight, target.macros.weight, amount), motion: lerp(source.macros.motion, target.macros.motion, amount), distance: lerp(source.macros.distance, target.macros.distance, amount) });
+      setHarmonicGravity(lerp(source.harmonicGravity, target.harmonicGravity, amount));
+      setPulseSpeed(lerp(source.pulseSpeed, target.pulseSpeed, amount)); setPulseDepth(lerp(source.pulseDepth, target.pulseDepth, amount));
+      setWanderSpeed(lerp(source.wanderSpeed, target.wanderSpeed, amount)); setWanderDepth(lerp(source.wanderDepth, target.wanderDepth, amount));
+      setSampleSettings({ grainRate: lerp(source.sampleSettings.grainRate, target.sampleSettings.grainRate, amount), grainPitch: lerp(source.sampleSettings.grainPitch, target.sampleSettings.grainPitch, amount), grainVolume: lerp(source.sampleSettings.grainVolume, target.sampleSettings.grainVolume, amount), grainSize: lerp(source.sampleSettings.grainSize, target.sampleSettings.grainSize, amount), grainDrift: lerp(source.sampleSettings.grainDrift, target.sampleSettings.grainDrift, amount), grainDensity: lerp(source.sampleSettings.grainDensity, target.sampleSettings.grainDensity, amount) });
+      setMorphProgress(amount);
+      if (amount < 1) { morphTimerRef.current = window.setTimeout(tick, 80); return; }
+      setPulsePattern(target.pulsePattern); setWanderOn(target.wanderOn); setPatchCables(target.patchCables); setSampleMode(target.sampleMode); setSampleThroughFx(target.sampleThroughFx);
+      setMorphTarget(null); setMorphProgress(0); morphTimerRef.current = null;
+    };
+    tick();
+  }, [currentScene, morphSeconds, scenes, stopMorph]);
+
   const updateSetting = <K extends keyof DroneSettings>(key: K, value: DroneSettings[K]) => {
     setSettings((previous) => ({ ...previous, [key]: value }));
   };
@@ -686,43 +944,59 @@ export default function DroneEnginePage() {
     const graph = graphRef.current;
     if (!graph) return;
     const now = graph.context.currentTime;
+    // Performance macros are a separate, reversible layer over the detailed
+    // patch controls. The original controls never move underneath the player.
+    const bloom = macros.bloom / 100;
+    const weight = macros.weight / 100;
+    const motion = macros.motion / 100;
+    const distance = macros.distance / 100;
+    const reverbAmount = clamp(settings.reverbAmount + bloom * 0.26 + distance * 0.22, 0, 1);
+    const delayAmount = clamp(settings.delayAmount + bloom * 0.18 + distance * 0.12, 0, 1);
+    const delayFeedback = clamp(settings.delayFeedback + distance * 0.12, 0, 0.88);
+    const chorusAmount = clamp(settings.chorusAmount + bloom * 0.16, 0, 1);
+    const driveAmount = clamp(settings.driveAmount + weight * 0.055, 0, 0.22);
+    const filterRate = settings.filterRate * (1 + motion * 1.8);
+    const filterDepth = clamp(settings.filterDepth + motion * 0.24, 0, 1);
+    const pitchDrift = clamp(settings.pitchDrift + motion * 0.16, 0, 1);
+    const panDepth = clamp(settings.panDepth + motion * 0.28, 0, 1);
     graph.droneMaster.gain.setTargetAtTime(settings.masterVolume, now, 0.08);
-    graph.eqLow.gain.setTargetAtTime(settings.eqLowGain, now, 0.1);
+    graph.eqLow.gain.setTargetAtTime(settings.eqLowGain + weight * 4.5, now, 0.1);
     graph.eqMid.gain.setTargetAtTime(settings.eqMidGain, now, 0.1);
     graph.eqHigh.gain.setTargetAtTime(settings.eqHighGain, now, 0.1);
     graph.compressor.threshold.setTargetAtTime(settings.compThreshold, now, 0.1);
     graph.compressor.ratio.setTargetAtTime(settings.compRatio, now, 0.1);
     graph.limiter.threshold.setTargetAtTime(settings.limiterCeiling, now, 0.1);
-    const spaceToneCut = patchCables.spaceToTone ? settings.reverbAmount * 1700 + settings.delayAmount * 800 : 0;
-    const modToSpaceAmount = patchCables.modToSpace ? settings.filterDepth * 0.12 : 0;
+    const spaceToneCut = patchCables.spaceToTone ? reverbAmount * 1700 + delayAmount * 800 + distance * 850 : 0;
+    const modToSpaceAmount = patchCables.modToSpace ? filterDepth * 0.12 : 0;
     const toneToModRate = patchCables.toneToMod ? 0.65 + (settings.basePitch / 110) * 0.7 : 1;
     graph.toneLow.frequency.setTargetAtTime(13500 - spaceToneCut, now, 0.3);
-    graph.droneReverbWet.gain.setTargetAtTime(settings.reverbAmount, now, 0.12);
-    graph.droneDry.gain.setTargetAtTime(1 - settings.reverbAmount * 0.5, now, 0.12);
-    graph.droneDelayWet.gain.setTargetAtTime(Math.min(1, settings.delayAmount + modToSpaceAmount * 0.3), now, 0.18);
+    graph.droneReverbWet.gain.setTargetAtTime(reverbAmount, now, 0.12);
+    graph.droneDry.gain.setTargetAtTime(1 - reverbAmount * 0.5 - distance * 0.12, now, 0.12);
+    graph.droneDelayWet.gain.setTargetAtTime(Math.min(1, delayAmount + modToSpaceAmount * 0.3), now, 0.18);
     // Longer time constant prevents zipper-like pitch jumps when the delay
     // control is moved while echoes are already ringing out.
     graph.droneDelay.delayTime.setTargetAtTime(Math.min(3, settings.delayTime + modToSpaceAmount), now, 0.35);
-    graph.droneDelayFeedback.gain.setTargetAtTime(settings.delayFeedback, now, 0.12);
-    graph.droneDrive.curve = createDriveCurve(settings.driveAmount);
-    graph.droneChorusDry.gain.setTargetAtTime(1 - settings.chorusAmount * 0.35, now, 0.12);
-    graph.droneChorusWet.gain.setTargetAtTime(settings.chorusAmount, now, 0.12);
-    graph.droneChorusDepth.gain.setTargetAtTime(settings.chorusAmount * 0.004, now, 0.12);
-    graph.droneChorusLfo.frequency.setTargetAtTime(0.12 + settings.filterRate * 2, now, 0.2);
+    graph.droneDelayFeedback.gain.setTargetAtTime(delayFeedback, now, 0.12);
+    graph.droneDrive.curve = createDriveCurve(driveAmount);
+    graph.droneChorusDry.gain.setTargetAtTime(1 - chorusAmount * 0.35, now, 0.12);
+    graph.droneChorusWet.gain.setTargetAtTime(chorusAmount, now, 0.12);
+    graph.droneChorusDepth.gain.setTargetAtTime(chorusAmount * 0.004, now, 0.12);
+    graph.droneChorusLfo.frequency.setTargetAtTime(0.12 + filterRate * 2, now, 0.2);
     graph.droneNoiseGain.gain.setTargetAtTime(running ? settings.noiseAmount * 0.12 : 0, now, 0.24);
     graph.droneNoiseFilter.type = settings.noiseColor === 'white' ? 'allpass' : 'lowpass';
     graph.droneNoiseFilter.frequency.setTargetAtTime(settings.noiseColor === 'brown' ? 720 : settings.noiseColor === 'pink' ? 3800 : 12000, now, 0.18);
     graph.pulseOsc.frequency.setTargetAtTime(settings.basePitch / 2, now, 0.3);
     graph.droneVoices.forEach((voice) => {
       const sine = settings.modulationShape === 'sine';
-      voice.filterLfo.frequency.setTargetAtTime(settings.filterRate * toneToModRate, now, 0.2);
-      voice.filterLfoGain.gain.setTargetAtTime(sine ? settings.filterDepth * 3000 : 0, now, 0.2);
-      voice.pitchLfo.frequency.setTargetAtTime(settings.filterRate * 0.3 * toneToModRate, now, 0.2);
-      voice.pitchLfoGain.gain.setTargetAtTime(sine ? settings.pitchDrift * 50 : 0, now, 0.2);
-      voice.volLfo.frequency.setTargetAtTime(settings.filterRate * 0.5 * toneToModRate, now, 0.2);
+      voice.filterLfo.frequency.setTargetAtTime(filterRate * toneToModRate, now, 0.2);
+      voice.filterLfoGain.gain.setTargetAtTime(sine ? filterDepth * 3000 : 0, now, 0.2);
+      voice.pitchLfo.frequency.setTargetAtTime(filterRate * 0.3 * toneToModRate, now, 0.2);
+      voice.pitchLfoGain.gain.setTargetAtTime(sine ? pitchDrift * 50 : 0, now, 0.2);
+      voice.volLfo.frequency.setTargetAtTime(filterRate * 0.5 * toneToModRate, now, 0.2);
       voice.volLfoGain.gain.setTargetAtTime(sine ? settings.volLfoDepth * 0.3 : 0, now, 0.2);
-      voice.panLfo.frequency.setTargetAtTime(settings.filterRate * 0.37 * toneToModRate, now, 0.2);
-      voice.panLfoGain.gain.setTargetAtTime(sine ? settings.panDepth : 0, now, 0.2);
+      voice.panLfo.frequency.setTargetAtTime(filterRate * 0.37 * toneToModRate, now, 0.2);
+      voice.panLfoGain.gain.setTargetAtTime(sine ? panDepth : 0, now, 0.2);
+      voice.subGain.gain.setTargetAtTime((0.6 / Math.sqrt(settings.oscCount)) * (1 + weight * 0.5), now, 0.2);
       if (voice.randomInterval) window.clearInterval(voice.randomInterval);
       voice.randomInterval = null;
       if (!sine) {
@@ -738,7 +1012,7 @@ export default function DroneEnginePage() {
         }, intervalMs);
       }
     });
-  }, [running, settings, patchCables, nextRandom]);
+  }, [running, settings, patchCables, macros, nextRandom]);
 
   // ── Audio Input: granular + loop engine ─────────────────────────
 
@@ -1226,6 +1500,272 @@ export default function DroneEnginePage() {
     if (isRecording) stopRecording(); else void startRecording();
   }, [isRecording, startRecording, stopRecording]);
 
+  // ── Minimal Machine: a fixed kick with slowly mutating detail ───
+
+  // A constrained random walk is the melodic "science" here: every new note
+  // is a nearby degree of the selected scale, while a stable portion of the
+  // previous phrase remains in place. The result evolves by voice-leading,
+  // rather than spraying unrelated notes into the mix.
+  const evolveMelodyPhrase = useCallback((preserveMotif = true) => {
+    const current = melodySettingsRef.current;
+    const scale = droneScales[settingsRef.current.scale].intervals;
+    const phrase: Array<number | null> = Array(16).fill(null);
+    const noteCount = clamp(Math.round(2 + (current.density / 100) * 6), 2, 8);
+    const positions = Array.from(euclideanSteps(noteCount, 16, Math.floor(nextRandom() * 4))).sort((a, b) => a - b);
+    let degree = 0;
+    positions.forEach((step, index) => {
+      const previous = melodyPhraseRef.current[step];
+      if (preserveMotif && previous !== null && nextRandom() < 0.58) {
+        phrase[step] = previous;
+        degree = previous;
+        return;
+      }
+      if (index === 0) degree = nextRandom() < 0.72 ? 0 : [2, 4][Math.floor(nextRandom() * 2)];
+      else {
+        const moves = [-2, -1, -1, 0, 0, 1, 1, 2];
+        degree = clamp(degree + moves[Math.floor(nextRandom() * moves.length)], 0, scale.length + 4);
+      }
+      phrase[step] = degree;
+    });
+    melodyPhraseRef.current = phrase;
+    setMelodyEvolution((count) => count + 1);
+  }, [nextRandom]);
+
+  const playScaleLockedMelody = useCallback((graph: Graph, degree: number, lateMs = 0) => {
+    const current = melodySettingsRef.current;
+    const scale = droneScales[settingsRef.current.scale].intervals;
+    const scaleDegree = ((degree % scale.length) + scale.length) % scale.length;
+    const octave = Math.floor(degree / scale.length);
+    const frequency = freqForSemitone(current.root + scale[scaleDegree] + octave * 12);
+    const now = graph.context.currentTime + lateMs * 0.001;
+    const duration = Math.min(0.62, 60 / technoSettingsRef.current.bpm * 1.08);
+    const filter = graph.context.createBiquadFilter();
+    const gain = graph.context.createGain();
+    const body = graph.context.createOscillator();
+    const air = graph.context.createOscillator();
+    filter.type = 'lowpass';
+    filter.frequency.value = 620 + current.brightness * 32;
+    filter.Q.value = 0.65;
+    body.type = 'triangle'; body.frequency.value = frequency;
+    air.type = 'sine'; air.frequency.value = frequency * 2;
+    const airGain = graph.context.createGain();
+    airGain.gain.value = 0.09;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.28, now + 0.035);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    body.connect(filter); air.connect(airGain); airGain.connect(filter); filter.connect(gain); gain.connect(graph.melodyGain);
+    body.start(now); air.start(now); body.stop(now + duration + 0.03); air.stop(now + duration + 0.03);
+  }, []);
+
+  const triggerMelodyDuck = useCallback((graph: Graph) => {
+    const current = melodySettingsRef.current;
+    if (!current.duck) return;
+    const now = graph.context.currentTime;
+    const floor = Math.max(0.05, 1 - current.duckDepth / 100 * 0.9);
+    const releaseSeconds = current.duckRelease / 1000;
+    graph.melodyDuckGain.gain.cancelScheduledValues(now);
+    graph.melodyDuckGain.gain.setValueAtTime(floor, now);
+    graph.melodyDuckGain.gain.exponentialRampToValueAtTime(1, now + releaseSeconds);
+  }, []);
+
+  const applyMelodyTranceGate = useCallback((graph: Graph, step: number) => {
+    const current = melodySettingsRef.current;
+    const now = graph.context.currentTime;
+    if (!current.tranceGate) {
+      graph.melodyGateGain.gain.setTargetAtTime(1, now, 0.015);
+      return;
+    }
+    const active = current.gatePattern === 'quarter' ? step % 4 === 0
+      : current.gatePattern === 'eighth' ? step % 2 === 0
+        : current.gatePattern === 'sixteenth' ? true
+          : [0, 3, 6, 10, 12].includes(step);
+    const floor = Math.max(0.03, 1 - current.gateDepth / 100 * 0.97);
+    graph.melodyGateGain.gain.cancelScheduledValues(now);
+    graph.melodyGateGain.gain.setValueAtTime(active ? 1 : floor, now);
+    if (active) graph.melodyGateGain.gain.exponentialRampToValueAtTime(floor, now + Math.min(0.08, 60 / technoSettingsRef.current.bpm / 5));
+  }, []);
+
+  const evolveTechnoPattern = useCallback(() => {
+    const current = technoSettingsRef.current;
+    const brokenKicks = [[0, 3, 7, 10, 12, 15], [0, 4, 7, 9, 12, 14], [0, 3, 6, 10, 12, 15]];
+    const kicks = current.kickMode === 'four'
+      ? euclideanSteps(4)
+      : new Set(brokenKicks[Math.floor(nextRandom() * brokenKicks.length)]);
+    const hats = euclideanSteps(current.hatPulses, 16, Math.floor(nextRandom() * 4));
+    const snares = euclideanSteps(current.snarePulses, 16, 12);
+    const ghostSnares = new Set<number>();
+    [5, 6, 10, 11, 14].forEach((step) => {
+      if (nextRandom() < current.snareDensity / 240) ghostSnares.add(step);
+    });
+    const toms = new Set<number>();
+    if (nextRandom() < current.tomActivity / 100) {
+      const rotation = nextRandom() < 0.5 ? 12 : 13;
+      euclideanSteps(current.tomPulses, 4, rotation % 4).forEach((step) => toms.add(step + 12));
+    }
+    technoPatternRef.current = { kicks, hats, snares, ghostSnares, toms, hatChance: 0.48 + (current.hatDensity / 100) * 0.46 };
+    setTechnoEvolution((count) => count + 1);
+  }, [nextRandom]);
+
+  const playTechnoKick = useCallback((graph: Graph) => {
+    const now = graph.context.currentTime;
+    const osc = graph.context.createOscillator();
+    const gain = graph.context.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(150, now);
+    osc.frequency.exponentialRampToValueAtTime(47, now + 0.12);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.82, now + 0.004);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.29);
+    osc.connect(gain); gain.connect(graph.technoGain); gain.connect(graph.rumbleSend);
+    osc.start(now); osc.stop(now + 0.32);
+    triggerMelodyDuck(graph);
+  }, [triggerMelodyDuck]);
+
+  const playTechnoNoise = useCallback((graph: Graph, kind: 'hat' | 'snare', humanize = 0, lateMs = 0) => {
+    const now = graph.context.currentTime + lateMs * 0.001 + (nextRandom() - 0.5) * humanize * 0.001;
+    const duration = kind === 'hat' ? 0.07 : 0.16;
+    const source = graph.context.createBufferSource();
+    const buffer = graph.context.createBuffer(1, Math.ceil(graph.context.sampleRate * duration), graph.context.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let index = 0; index < data.length; index += 1) data[index] = Math.random() * 2 - 1;
+    source.buffer = buffer;
+    const filter = graph.context.createBiquadFilter();
+    const gain = graph.context.createGain();
+    filter.type = kind === 'hat' ? 'highpass' : 'bandpass';
+    filter.frequency.value = kind === 'hat' ? 7200 : 1700;
+    filter.Q.value = kind === 'hat' ? 0.9 : 0.7;
+    const peak = kind === 'hat' ? 0.10 + nextRandom() * 0.09 : 0.20 + nextRandom() * 0.12;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    source.connect(filter); filter.connect(gain); gain.connect(graph.technoGain);
+    source.start(now); source.stop(now + duration + 0.01);
+  }, [nextRandom]);
+
+  const playTechnoTom = useCallback((graph: Graph, step: number, humanize = 0, lateMs = 0) => {
+    const now = graph.context.currentTime + lateMs * 0.001 + (nextRandom() - 0.5) * humanize * 0.001;
+    const osc = graph.context.createOscillator();
+    const gain = graph.context.createGain();
+    const frequencies = [176, 146, 122, 104];
+    const frequency = frequencies[(step + Math.floor(nextRandom() * frequencies.length)) % frequencies.length];
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(frequency * 1.6, now);
+    osc.frequency.exponentialRampToValueAtTime(frequency, now + 0.18);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.17, now + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.34);
+    osc.connect(gain); gain.connect(graph.technoGain);
+    osc.start(now); osc.stop(now + 0.38);
+  }, [nextRandom]);
+
+  const scheduleTechnoStep = useCallback(() => {
+    const graph = graphRef.current;
+    if (!graph || !technoPlayingRef.current || !runningRef.current || pausedRef.current) return;
+    const step = technoStepRef.current % 16;
+    if (step === 0) {
+      const bar = technoBarRef.current;
+      if (bar > 0 && bar % technoSettingsRef.current.evolveBars === 0) evolveTechnoPattern();
+      if (melodySettingsRef.current.enabled && bar % melodySettingsRef.current.evolveBars === 0) evolveMelodyPhrase(bar > 0);
+      technoBarRef.current += 1;
+    }
+    const pattern = technoPatternRef.current;
+    const humanize = technoSettingsRef.current.humanize;
+    const swingOffset = step % 2 === 1 ? (60 / technoSettingsRef.current.bpm / 4) * (technoSettingsRef.current.swing / 100) * 650 : 0;
+    if (pattern.kicks.has(step)) playTechnoKick(graph);
+    if (pattern.snares.has(step)) playTechnoNoise(graph, 'snare', humanize, swingOffset);
+    if (pattern.ghostSnares.has(step) && nextRandom() < 0.68) playTechnoNoise(graph, 'snare', humanize, swingOffset);
+    if (pattern.hats.has(step) && nextRandom() < pattern.hatChance) playTechnoNoise(graph, 'hat', humanize, swingOffset);
+    if (pattern.toms.has(step)) playTechnoTom(graph, step, humanize, swingOffset);
+    applyMelodyTranceGate(graph, step);
+    const melodyDegree = melodyPhraseRef.current[step];
+    if (melodySettingsRef.current.enabled && melodyDegree !== null) playScaleLockedMelody(graph, melodyDegree, swingOffset);
+    technoStepRef.current += 1;
+    technoTimerRef.current = window.setTimeout(() => scheduleTechnoStepRef.current(), (60 / technoSettingsRef.current.bpm / 4) * 1000);
+  }, [applyMelodyTranceGate, evolveMelodyPhrase, evolveTechnoPattern, nextRandom, playScaleLockedMelody, playTechnoKick, playTechnoNoise, playTechnoTom]);
+
+  useEffect(() => { scheduleTechnoStepRef.current = scheduleTechnoStep; }, [scheduleTechnoStep]);
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (graph) graph.technoGain.gain.setTargetAtTime(technoSettings.volume / 100, graph.context.currentTime, 0.06);
+  }, [technoSettings.volume]);
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (graph) graph.melodyGain.gain.setTargetAtTime(melodySettings.enabled ? melodySettings.volume / 100 : 0.0001, graph.context.currentTime, 0.12);
+  }, [melodySettings.enabled, melodySettings.volume]);
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || melodySettings.duck) return;
+    graph.melodyDuckGain.gain.setTargetAtTime(1, graph.context.currentTime, 0.04);
+  }, [melodySettings.duck]);
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph || melodySettings.tranceGate) return;
+    graph.melodyGateGain.gain.setTargetAtTime(1, graph.context.currentTime, 0.04);
+  }, [melodySettings.tranceGate]);
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    graph.rumbleGain.gain.setTargetAtTime(technoPreset === 'rumble' ? 0.58 : 0.0001, graph.context.currentTime, 0.18);
+  }, [technoPreset]);
+  useEffect(() => () => { if (technoTimerRef.current) window.clearTimeout(technoTimerRef.current); }, []);
+
+  const toggleTechnoMachine = useCallback(() => {
+    if (technoPlayingRef.current) {
+      if (technoTimerRef.current) window.clearTimeout(technoTimerRef.current);
+      technoTimerRef.current = null;
+      technoPlayingRef.current = false;
+      setTechnoPlaying(false);
+      return;
+    }
+    technoStepRef.current = 0;
+    technoBarRef.current = 0;
+    evolveTechnoPattern();
+    evolveMelodyPhrase(false);
+    setTechnoPlaying(true);
+    technoPlayingRef.current = true;
+    void ensureAudio().then(() => scheduleTechnoStepRef.current());
+  }, [ensureAudio, evolveMelodyPhrase, evolveTechnoPattern]);
+
+  const applyTechnoPreset = useCallback((preset: TechnoPresetName) => {
+    const presets: Record<typeof preset, Partial<TechnoSettings>> = {
+      classic: { bpm: 132, hatPulses: 8, snarePulses: 1, tomPulses: 1, hatDensity: 64, snareDensity: 18, tomActivity: 20, evolveBars: 8, humanize: 7, swing: 0, kickMode: 'four' },
+      detroit: { bpm: 128, hatPulses: 9, snarePulses: 2, tomPulses: 1, hatDensity: 72, snareDensity: 45, tomActivity: 25, evolveBars: 6, humanize: 11, swing: 28, kickMode: 'four' },
+      hardgroove: { bpm: 136, hatPulses: 12, snarePulses: 1, tomPulses: 3, hatDensity: 84, snareDensity: 24, tomActivity: 72, evolveBars: 4, humanize: 9, swing: 8, kickMode: 'four' },
+      rumble: { bpm: 132, hatPulses: 5, snarePulses: 1, tomPulses: 1, hatDensity: 52, snareDensity: 12, tomActivity: 14, evolveBars: 12, humanize: 4, swing: 0, kickMode: 'four' },
+      broken: { bpm: 136, hatPulses: 10, snarePulses: 3, tomPulses: 2, hatDensity: 76, snareDensity: 34, tomActivity: 42, evolveBars: 4, humanize: 12, swing: 16, kickMode: 'broken' },
+    };
+    const next = { ...technoSettingsRef.current, ...presets[preset] };
+    technoSettingsRef.current = next;
+    setTechnoSettings(next);
+    setTechnoPreset(preset);
+    evolveTechnoPattern();
+  }, [evolveTechnoPattern]);
+
+  const mixTechnoMachine = useCallback(() => {
+    const next: TechnoSettings = {
+      ...technoSettingsRef.current,
+      bpm: 124 + Math.floor(nextRandom() * 16),
+      hatPulses: 5 + Math.floor(nextRandom() * 10),
+      snarePulses: 1 + Math.floor(nextRandom() * 3),
+      tomPulses: Math.floor(nextRandom() * 5),
+      hatDensity: 45 + Math.floor(nextRandom() * 51),
+      snareDensity: Math.floor(nextRandom() * 56),
+      tomActivity: Math.floor(nextRandom() * 66),
+      evolveBars: 2 + Math.floor(nextRandom() * 11),
+      humanize: 3 + Math.floor(nextRandom() * 16),
+      swing: Math.floor(nextRandom() * 35),
+      kickMode: nextRandom() < 0.22 ? 'broken' : 'four',
+    };
+    technoSettingsRef.current = next;
+    setTechnoSettings(next);
+    setTechnoPreset('mix');
+    evolveTechnoPattern();
+  }, [evolveTechnoPattern, nextRandom]);
+
+  useEffect(() => {
+    if (!paused && technoPlayingRef.current && !technoTimerRef.current) scheduleTechnoStepRef.current();
+  }, [paused]);
+
   // ── Pulse: ratio-timed soft sub thump ───────────────────────────
 
   const triggerPulseHit = useCallback((depth: number) => {
@@ -1477,10 +2017,19 @@ export default function DroneEnginePage() {
       const voiceKey = `${payload.channel ?? 0}:${payload.note}`;
       if (payload.messageType === 'noteOn') {
         if (midiModeRef.current === 'trigger') void playMidiNote(voiceKey, payload.note, payload.velocity ?? 100);
-        if (midiModeRef.current === 'root') midiRootNoteRef.current = payload.note;
+        if (midiModeRef.current === 'root') {
+          midiHeldRootsRef.current.delete(voiceKey);
+          midiHeldRootsRef.current.set(voiceKey, payload.note);
+          midiRootNoteRef.current = payload.note;
+          setMidiRootNote(payload.note);
+        }
       } else if (payload.messageType === 'noteOff') {
         if (midiModeRef.current === 'trigger') releaseMidiNote(voiceKey);
-        if (midiModeRef.current === 'root' && midiRootNoteRef.current === payload.note) midiRootNoteRef.current = null;
+        if (midiModeRef.current === 'root') {
+          midiHeldRootsRef.current.delete(voiceKey);
+          midiRootNoteRef.current = Array.from(midiHeldRootsRef.current.values()).at(-1) ?? null;
+          setMidiRootNote(midiRootNoteRef.current);
+        }
       }
     }).then((unlisten) => { if (disposed) unlisten(); else unlistenMessage = unlisten; });
     void listen<MidiStatus>('midi-status', ({ payload }) => setMidiStatus(payload.message)).then((unlisten) => { if (disposed) unlisten(); else unlistenStatus = unlisten; });
@@ -2041,6 +2590,45 @@ export default function DroneEnginePage() {
               <div className="sample-help">Click a cable to patch or unpatch it. Active cables are real: pitch shapes LFO pace, modulation depth opens the delay, and Space → Tone gently darkens the source as the room grows.</div>
             </div>
 
+            <div className="panel panel-full performance-panel">
+              <div className="performance-heading">
+                <div><h3>Performance</h3><span>Guide the world without rewriting the patch.</span></div>
+                <button type="button" className={`btn freeze-btn${freezeActive ? ' active' : ''}`} disabled={!freezeActive && voiceCount === 0} onClick={() => { if (freezeActive) releaseFreeze(); else void captureFreeze(); }}>
+                  {freezeActive ? 'Release Freeze' : 'Capture Freeze'}
+                </button>
+              </div>
+              <div className="macro-grid">
+                {(Object.entries(macros) as Array<[keyof PerformanceMacros, number]>).map(([name, value]) => (
+                  <label className="macro-control" key={name}>
+                    <span>{name}</span>
+                    <strong>{Math.round(value)}</strong>
+                    <input aria-label={`${name} macro`} type="range" min="0" max="100" step="1" value={value} onChange={(event) => setMacros((current) => ({ ...current, [name]: Number(event.target.value) }))} />
+                  </label>
+                ))}
+                <label className="macro-control gravity-control">
+                  <span>Harmonic gravity</span>
+                  <strong>{Math.round(harmonicGravity)}</strong>
+                  <input aria-label="Harmonic gravity" type="range" min="0" max="100" step="1" value={harmonicGravity} onChange={(event) => setHarmonicGravity(Number(event.target.value))} />
+                  <small>{midiMode !== 'root' || midiRootNote === null ? 'Hold a MIDI root to engage' : `Following ${nameForSemitone(midiRootNote)}`}</small>
+                </label>
+              </div>
+              <div className="scene-strip">
+                {(['a', 'b'] as const).map((slot) => (
+                  <div className={`scene-slot${scenes[slot] ? ' stored' : ''}`} key={slot}>
+                    <span>Scene {slot.toUpperCase()}</span>
+                    <button type="button" className="btn" onClick={() => captureScene(slot)}>{scenes[slot] ? 'Overwrite' : 'Store'}</button>
+                    {scenes[slot] && <>
+                      <button type="button" className="btn" disabled={morphTarget !== null} onClick={() => applyScene(scenes[slot]!)}>Recall</button>
+                      <button type="button" className="btn" disabled={morphTarget !== null} onClick={() => morphToScene(slot)}>Morph to {slot.toUpperCase()}</button>
+                    </>}
+                  </div>
+                ))}
+                <label className="morph-time"><span>Morph time</span><strong>{morphSeconds}s</strong><input aria-label="Scene morph time" type="range" min="10" max="120" step="5" value={morphSeconds} onChange={(event) => setMorphSeconds(Number(event.target.value))} /></label>
+                {morphTarget && <button type="button" className="btn btn-warm" onClick={stopMorph}>Cancel morph · {Math.round(morphProgress * 100)}%</button>}
+              </div>
+              <div className="sample-help">Bloom, Weight, Motion, and Distance are live overlays. Freeze preserves the active harmony while new voices continue forming around it. Scenes capture sound settings only—never audio files, recording, or MIDI connections.</div>
+            </div>
+
             <div className="panel panel-full">
               <h3>Scale &amp; Generation</h3>
               <div className="scale-row" style={{ marginBottom: 16 }}>
@@ -2059,8 +2647,10 @@ export default function DroneEnginePage() {
               <div className="btn-row" style={{ marginTop: 16 }}>
                 <button className={`btn${paused ? ' active' : ''}`} type="button" onClick={togglePause}>{paused ? 'Resume' : 'Pause'}</button>
                 <button className="btn" type="button" onClick={newSeed}>New Seed</button>
+                <button className="btn btn-warm" type="button" onClick={newWorld}>New World</button>
                 <button className="btn btn-warm" type="button" onClick={releaseAll}>Stop All</button>
               </div>
+              <div className="sample-help">New World fades the current generative layer into the room, releases a captured Freeze, and starts a newly seeded set of relationships without changing your patch.</div>
             </div>
 
             <div className="panel panel-full">
@@ -2098,6 +2688,140 @@ export default function DroneEnginePage() {
                   </div>
                 </div>
               </div>
+            </div>
+
+            <div className="panel panel-full performance-panel">
+              <div className="performance-heading">
+                <div>
+                  <h3>Minimal Machine</h3>
+                  <span>{technoPreset === 'rumble' ? 'Kick-derived low rumble engaged' : technoPreset === 'broken' ? 'Variable kick pattern engaged' : 'Fixed four-to-the-floor kick · per-voice patterns evolve'}</span>
+                </div>
+                <div className="btn-row">
+                  <button type="button" className="btn" onClick={mixTechnoMachine}>Mix</button>
+                  <button type="button" className={`btn freeze-btn${technoPlaying ? ' active' : ''}`} onClick={toggleTechnoMachine}>{technoPlaying ? 'Stop Machine' : 'Start Machine'}</button>
+                </div>
+              </div>
+              <div className="scale-row" style={{ marginBottom: 16 }}>
+                <button type="button" className={`scale-btn${technoPreset === 'classic' ? ' active' : ''}`} onClick={() => applyTechnoPreset('classic')}>Classic</button>
+                <button type="button" className={`scale-btn${technoPreset === 'detroit' ? ' active' : ''}`} onClick={() => applyTechnoPreset('detroit')}>Detroit</button>
+                <button type="button" className={`scale-btn${technoPreset === 'hardgroove' ? ' active' : ''}`} onClick={() => applyTechnoPreset('hardgroove')}>Hardgroove</button>
+                <button type="button" className={`scale-btn${technoPreset === 'rumble' ? ' active' : ''}`} onClick={() => applyTechnoPreset('rumble')}>Rumble</button>
+                <button type="button" className={`scale-btn${technoPreset === 'broken' ? ' active' : ''}`} onClick={() => applyTechnoPreset('broken')}>Broken</button>
+              </div>
+              <div className="pulse-wander-grid">
+                <div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Tempo</span><span>{technoSettings.bpm} BPM</span></div>
+                    <input aria-label="Minimal machine tempo" type="range" min="118" max="142" step="1" value={technoSettings.bpm} onChange={(event) => setTechnoSettings((current) => ({ ...current, bpm: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Euclidean hats</span><span>{technoSettings.hatPulses}/16</span></div>
+                    <input aria-label="Euclidean hi-hat pulses" type="range" min="0" max="16" step="1" value={technoSettings.hatPulses} onChange={(event) => setTechnoSettings((current) => ({ ...current, hatPulses: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Euclidean snares</span><span>{technoSettings.snarePulses}/16</span></div>
+                    <input aria-label="Euclidean snare pulses" type="range" min="0" max="4" step="1" value={technoSettings.snarePulses} onChange={(event) => setTechnoSettings((current) => ({ ...current, snarePulses: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Hat chance</span><span>{technoSettings.hatDensity}%</span></div>
+                    <input aria-label="Hi-hat chance" type="range" min="20" max="100" step="1" value={technoSettings.hatDensity} onChange={(event) => setTechnoSettings((current) => ({ ...current, hatDensity: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Snare ghosts</span><span>{technoSettings.snareDensity}%</span></div>
+                    <input aria-label="Snare ghost density" type="range" min="0" max="100" step="1" value={technoSettings.snareDensity} onChange={(event) => setTechnoSettings((current) => ({ ...current, snareDensity: Number(event.target.value) }))} />
+                  </div>
+                </div>
+                <div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Euclidean tom fill</span><span>{technoSettings.tomPulses}/4</span></div>
+                    <input aria-label="Euclidean tom pulses" type="range" min="0" max="4" step="1" value={technoSettings.tomPulses} onChange={(event) => setTechnoSettings((current) => ({ ...current, tomPulses: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Evolve interval</span><span>{technoSettings.evolveBars} bars</span></div>
+                    <input aria-label="Pattern evolution interval" type="range" min="2" max="16" step="1" value={technoSettings.evolveBars} onChange={(event) => setTechnoSettings((current) => ({ ...current, evolveBars: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Humanize</span><span>±{technoSettings.humanize} ms</span></div>
+                    <input aria-label="Machine humanize" type="range" min="0" max="24" step="1" value={technoSettings.humanize} onChange={(event) => setTechnoSettings((current) => ({ ...current, humanize: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Tom fill chance</span><span>{technoSettings.tomActivity}%</span></div>
+                    <input aria-label="Tom fill activity" type="range" min="0" max="100" step="1" value={technoSettings.tomActivity} onChange={(event) => setTechnoSettings((current) => ({ ...current, tomActivity: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Swing</span><span>{technoSettings.swing}%</span></div>
+                    <input aria-label="Machine swing" type="range" min="0" max="50" step="1" value={technoSettings.swing} onChange={(event) => setTechnoSettings((current) => ({ ...current, swing: Number(event.target.value) }))} />
+                  </div>
+                </div>
+              </div>
+              <div className="slider-group" style={{ marginTop: 12 }}>
+                <div className="slider-label"><span>Machine level</span><span>{technoSettings.volume}%</span></div>
+                <input aria-label="Minimal machine level" type="range" min="0" max="100" step="1" value={technoSettings.volume} onChange={(event) => setTechnoSettings((current) => ({ ...current, volume: Number(event.target.value) }))} />
+              </div>
+              <div className="sample-help">Evolution {technoEvolution}: per-voice Euclidean patterns refresh every {technoSettings.evolveBars} bars. Mix randomizes the full groove while the kick remains locked.</div>
+            </div>
+
+            <div className="panel panel-full performance-panel">
+              <div className="performance-heading">
+                <div>
+                  <h3>Constrained Melody</h3>
+                  <span>Scale-locked random walk · preserves a motif while changing its voice-leading</span>
+                </div>
+                <button type="button" className={`btn freeze-btn${melodySettings.enabled ? ' active' : ''}`} onClick={() => setMelodySettings((current) => ({ ...current, enabled: !current.enabled }))}>{melodySettings.enabled ? 'Melody On' : 'Melody Off'}</button>
+              </div>
+              <div className="scale-row" style={{ marginBottom: 16 }}>
+                {([{ label: 'D', value: 50 }, { label: 'E', value: 52 }, { label: 'F', value: 53 }, { label: 'A', value: 57 }] as const).map((key) => (
+                  <button key={key.label} type="button" className={`scale-btn${melodySettings.root === key.value ? ' active' : ''}`} onClick={() => setMelodySettings((current) => ({ ...current, root: key.value }))}>{key.label} root</button>
+                ))}
+                <span className="notes-empty">Scale: {droneScales[settings.scale].label}</span>
+              </div>
+              <div className="btn-row" style={{ marginBottom: 16 }}>
+                <button type="button" className={`btn${melodySettings.duck ? ' active' : ''}`} onClick={() => setMelodySettings((current) => ({ ...current, duck: !current.duck }))}>{melodySettings.duck ? 'Duck On' : 'Duck Off'}</button>
+                <button type="button" className={`btn${melodySettings.tranceGate ? ' active' : ''}`} onClick={() => setMelodySettings((current) => ({ ...current, tranceGate: !current.tranceGate }))}>{melodySettings.tranceGate ? 'Trance Gate On' : 'Trance Gate Off'}</button>
+              </div>
+              <div className="pulse-wander-grid">
+                <div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Phrase density</span><span>{melodySettings.density}%</span></div>
+                    <input aria-label="Melody phrase density" type="range" min="15" max="90" step="1" value={melodySettings.density} onChange={(event) => setMelodySettings((current) => ({ ...current, density: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Motif evolution</span><span>{melodySettings.evolveBars} bars</span></div>
+                    <input aria-label="Melody evolution interval" type="range" min="2" max="16" step="1" value={melodySettings.evolveBars} onChange={(event) => setMelodySettings((current) => ({ ...current, evolveBars: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Duck depth</span><span>{melodySettings.duckDepth}%</span></div>
+                    <input aria-label="Melody duck depth" type="range" min="0" max="100" step="1" disabled={!melodySettings.duck} value={melodySettings.duckDepth} onChange={(event) => setMelodySettings((current) => ({ ...current, duckDepth: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Duck release</span><span>{melodySettings.duckRelease} ms</span></div>
+                    <input aria-label="Melody duck release" type="range" min="80" max="600" step="10" disabled={!melodySettings.duck} value={melodySettings.duckRelease} onChange={(event) => setMelodySettings((current) => ({ ...current, duckRelease: Number(event.target.value) }))} />
+                  </div>
+                </div>
+                <div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Softness / brightness</span><span>{melodySettings.brightness}%</span></div>
+                    <input aria-label="Melody brightness" type="range" min="0" max="100" step="1" value={melodySettings.brightness} onChange={(event) => setMelodySettings((current) => ({ ...current, brightness: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Melody level</span><span>{melodySettings.volume}%</span></div>
+                    <input aria-label="Melody level" type="range" min="0" max="100" step="1" value={melodySettings.volume} onChange={(event) => setMelodySettings((current) => ({ ...current, volume: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Trance gate depth</span><span>{melodySettings.gateDepth}%</span></div>
+                    <input aria-label="Melody trance gate depth" type="range" min="0" max="100" step="1" disabled={!melodySettings.tranceGate} value={melodySettings.gateDepth} onChange={(event) => setMelodySettings((current) => ({ ...current, gateDepth: Number(event.target.value) }))} />
+                  </div>
+                  <div className="scale-row" style={{ marginTop: 12 }}>
+                    {([{ label: '¼', value: 'quarter' }, { label: '⅛', value: 'eighth' }, { label: '⅟₁₆', value: 'sixteenth' }, { label: 'Pulse', value: 'pulse' }] as const).map((pattern) => (
+                      <button key={pattern.value} type="button" disabled={!melodySettings.tranceGate} className={`scale-btn${melodySettings.gatePattern === pattern.value ? ' active' : ''}`} onClick={() => setMelodySettings((current) => ({ ...current, gatePattern: pattern.value }))}>{pattern.label}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="btn-row" style={{ marginTop: 16 }}>
+                <button type="button" className="btn" onClick={() => evolveMelodyPhrase(true)}>Evolve Motif</button>
+              </div>
+              <div className="sample-help">Melody evolution {melodyEvolution}: notes only come from the selected root and current scale. Duck follows the kick; Trance Gate rhythmically opens the melodic synth at the selected division.</div>
             </div>
 
             <div className="panel panel-full">
