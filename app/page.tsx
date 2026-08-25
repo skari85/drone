@@ -1,11 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DragEvent } from 'react';
+import type { CSSProperties, DragEvent } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { save as saveFileDialog } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
+import { composeMelody, mutateComposition } from './melodic-engine';
+import type { ComposerSettings, MelodyComposition, MelodyContour, MelodyMode, MelodyNote, MelodyProgression } from './melodic-engine';
 
 type DroneScaleName = 'minor' | 'dorian' | 'phrygian' | 'pentaMinor' | 'pentaMajor' | 'wholeTone' | 'harmonicMinor' | 'lydian';
 type ModulationShape = 'sine' | 'random';
@@ -15,8 +17,8 @@ type PulsePattern = 'off' | 'steady' | 'doom' | 'sparse';
 type TechnoPresetName = 'classic' | 'detroit' | 'hardgroove' | 'rumble' | 'broken';
 type TechnoSettings = { bpm: number; hatDensity: number; snareDensity: number; tomActivity: number; evolveBars: number; volume: number; hatPulses: number; snarePulses: number; tomPulses: number; humanize: number; swing: number; kickMode: 'four' | 'broken' };
 type TechnoPattern = { kicks: Set<number>; hats: Set<number>; snares: Set<number>; ghostSnares: Set<number>; toms: Set<number>; hatChance: number };
-type MelodySettings = { enabled: boolean; root: number; density: number; evolveBars: number; brightness: number; volume: number; duck: boolean; duckDepth: number; duckRelease: number; tranceGate: boolean; gateDepth: number; gatePattern: 'quarter' | 'eighth' | 'sixteenth' | 'pulse' };
-type DroneSettings = { basePitch: number; detuneCents: number; oscCount: number; waveform: OscillatorType; modulationShape: ModulationShape; filterRate: number; filterDepth: number; pitchDrift: number; volLfoDepth: number; panDepth: number; noiseColor: NoiseColor; noiseAmount: number; reverbAmount: number; delayAmount: number; delayTime: number; delayFeedback: number; chorusAmount: number; driveAmount: number; masterVolume: number; scale: DroneScaleName; genSpeed: number; maxVoices: number; eqLowGain: number; eqMidGain: number; eqHighGain: number; compThreshold: number; compRatio: number; limiterCeiling: number };
+type MelodySettings = ComposerSettings & { enabled: boolean; composerEnabled: boolean; root: number; density: number; evolveBars: number; brightness: number; volume: number; duck: boolean; duckDepth: number; duckRelease: number; tranceGate: boolean; gateDepth: number; gatePattern: 'quarter' | 'eighth' | 'sixteenth' | 'pulse' };
+type DroneSettings = { basePitch: number; detuneCents: number; oscCount: number; waveform: OscillatorType; modulationShape: ModulationShape; filterRate: number; filterDepth: number; pitchDrift: number; volLfoDepth: number; panDepth: number; noiseColor: NoiseColor; noiseAmount: number; reverbAmount: number; delayAmount: number; delayTime: number; delayFeedback: number; chorusAmount: number; driveAmount: number; masterVolume: number; scale: DroneScaleName; genSpeed: number; maxVoices: number; kickSpace: boolean; kickDuckDepth: number; kickDuckRelease: number; kickBassDuckDepth: number; kickBassDuckRelease: number; kickBassSplit: number; synthLowCut: number; synthHighCut: number; synthCompThreshold: number; synthCompRatio: number; synthLimiterCeiling: number; drumDriveAmount: number; drumCompThreshold: number; drumCompRatio: number; drumLimiterCeiling: number; eqLowGain: number; eqMidGain: number; eqHighGain: number; masterSaturation: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; limiterCeiling: number };
 type DroneVoiceNode = { noteName: string; semitone: number; oscillators: Array<{ osc: OscillatorNode; gain: GainNode }>; subOsc: OscillatorNode; subGain: GainNode; airOsc: OscillatorNode; airGain: GainNode; voiceGain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode; filterLfo: OscillatorNode; filterLfoGain: GainNode; pitchLfo: OscillatorNode; pitchLfoGain: GainNode; volLfo: OscillatorNode; volLfoGain: GainNode; panLfo: OscillatorNode; panLfoGain: GainNode; randomInterval: number | null };
 type SampleSettings = { grainRate: number; grainPitch: number; grainVolume: number; grainSize: number; grainDrift: number; grainDensity: number };
 type PatchCables = { toneToMod: boolean; modToSpace: boolean; spaceToTone: boolean };
@@ -27,6 +29,18 @@ type MidiMessage = { messageType: 'noteOn' | 'noteOff' | 'clock' | 'start' | 'co
 type MidiStatus = { state: 'connected' | 'disconnected' | 'error'; message: string };
 type LiveVoice = { oscillators: OscillatorNode[]; subOsc: OscillatorNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode };
 type PerformanceMacros = { bloom: number; weight: number; motion: number; distance: number };
+type AcidSettings = { enabled: boolean; cutoff: number; resonance: number; drive: number; octave: number; accent: number; steps: boolean[]; accents: boolean[] };
+type LiveGrid = { kicks: boolean[]; hats: boolean[]; snares: boolean[]; toms: boolean[] };
+type ArtistSceneId = 'longBlend' | 'redline' | 'orbit' | 'reduction' | 'peakPressure';
+type ArtistScene = { id: ArtistSceneId; artist: string; title: string; description: string; settings: Partial<DroneSettings>; techno: Partial<TechnoSettings>; melody: Partial<MelodySettings>; macros: Partial<PerformanceMacros>; acid: Partial<AcidSettings>; rumble: RumbleDna; ritual: number };
+type GestureFrame = { at: number; macros: PerformanceMacros };
+type MixerChannelId = 'drone' | 'machine' | 'melody' | 'acid' | 'input' | 'pulse' | 'ritual' | 'master';
+type MixerChannelSetting = { volume: number; muted: boolean; low: number; mid: number; high: number };
+type MixerSettings = Record<MixerChannelId, MixerChannelSetting>;
+type MixerChannelNodes = { input: GainNode; low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode; output: GainNode };
+type MasterMeter = { compressor: number; limiter: number };
+type RumbleDna = 'cavern' | 'metal' | 'dust' | 'sub';
+type AfterimageSettings = { enabled: boolean; memory: number; erosion: number; mutation: number };
 type FrozenVoice = LiveVoice;
 type PerformanceScene = {
   settings: DroneSettings; macros: PerformanceMacros; harmonicGravity: number;
@@ -35,18 +49,19 @@ type PerformanceScene = {
   patchCables: PatchCables; sampleSettings: SampleSettings; sampleMode: SampleMode; sampleThroughFx: boolean;
 };
 type Graph = {
-  context: AudioContext; master: GainNode; toneHigh: BiquadFilterNode; toneLow: BiquadFilterNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode;
+  context: AudioContext; master: GainNode; toneHigh: BiquadFilterNode; toneLow: BiquadFilterNode; masterDrive: WaveShaperNode; compressor: DynamicsCompressorNode; analyser: AnalyserNode;
   eqLow: BiquadFilterNode; eqMid: BiquadFilterNode; eqHigh: BiquadFilterNode; limiter: DynamicsCompressorNode;
-  droneMaster: GainNode; droneBus: GainNode; droneDrive: WaveShaperNode; droneChorusDry: GainNode; droneChorusDelay: DelayNode; droneChorusWet: GainNode; droneChorusLfo: OscillatorNode; droneChorusDepth: GainNode;
-  technoGain: GainNode; melodyGain: GainNode; melodyDuckGain: GainNode; melodyGateGain: GainNode; rumbleSend: GainNode; rumbleReverb: ConvolverNode; rumbleFilter: BiquadFilterNode; rumbleGain: GainNode;
+  droneMaster: GainNode; droneBus: GainNode; synthBus: GainNode; synthBassFilter: BiquadFilterNode; synthBassDuckGain: GainNode; synthPresenceFilter: BiquadFilterNode; synthMixBus: GainNode; synthDuckGain: GainNode; synthLowCut: BiquadFilterNode; synthHighCut: BiquadFilterNode; synthCompressor: DynamicsCompressorNode; synthLimiter: DynamicsCompressorNode; droneDrive: WaveShaperNode; droneChorusDry: GainNode; droneChorusDelay: DelayNode; droneChorusWet: GainNode; droneChorusLfo: OscillatorNode; droneChorusDepth: GainNode;
+  drumBus: GainNode; drumDrive: WaveShaperNode; drumCompressor: DynamicsCompressorNode; drumLimiter: DynamicsCompressorNode; technoGain: GainNode; melodyGain: GainNode; melodyDuckGain: GainNode; melodyGateGain: GainNode; rumbleSend: GainNode; rumbleReverb: ConvolverNode; rumbleFilter: BiquadFilterNode; rumbleGain: GainNode;
   droneDry: GainNode; droneReverb: ConvolverNode; droneReverbPreDelay: DelayNode; droneReverbWet: GainNode;
   droneDelay: DelayNode; droneDelayFilter: BiquadFilterNode; droneDelayFeedback: GainNode; droneDelayWet: GainNode;
   droneNoise: AudioBufferSourceNode; droneNoiseFilter: BiquadFilterNode; droneNoiseGain: GainNode;
   droneVoices: Map<number, DroneVoiceNode>;
   sampleGain: GainNode; sampleFilter: BiquadFilterNode; sampleFormantFilters: BiquadFilterNode[]; sampleTubeDrive: WaveShaperNode; sampleTubeTone: BiquadFilterNode; sampleBuffer: AudioBuffer | null; sampleOriginalBuffer: AudioBuffer | null; loopSource: AudioBufferSourceNode | null; granularTimer: number | null;
-  recordProcessor: ScriptProcessorNode | null;
+  recordProcessor: ScriptProcessorNode | null; ritualProcessor: ScriptProcessorNode;
   pulseOsc: OscillatorNode; pulseGain: GainNode; pulseFilter: BiquadFilterNode; pulseTimer: number | null; pulseStep: number;
   wanderLfo: OscillatorNode; wanderReverbGain: GainNode; wanderToneGain: GainNode; wanderChorusGain: GainNode;
+  mixerChannels: Record<MixerChannelId, MixerChannelNodes>;
 };
 
 const droneScales: Record<DroneScaleName, { label: string; intervals: number[] }> = {
@@ -76,13 +91,39 @@ const defaultDroneSettings: DroneSettings = {
   pitchDrift: 0.15, volLfoDepth: 0.3, panDepth: 0.35, noiseColor: 'brown', noiseAmount: 0.12,
   reverbAmount: 0.7, delayAmount: 0.4, delayTime: 0.8, delayFeedback: 0.45, chorusAmount: 0.18, driveAmount: 0.04,
   masterVolume: 0.5, scale: 'minor', genSpeed: 8, maxVoices: 6,
-  eqLowGain: 0, eqMidGain: 0, eqHighGain: 0, compThreshold: -18, compRatio: 6, limiterCeiling: -1,
+  // Keep subsonic build-up away from the kick by default. The synth bus,
+  // including its reverb and delay returns, ducks independently of the kick.
+  kickSpace: true, kickDuckDepth: 26, kickDuckRelease: 170, kickBassDuckDepth: 78, kickBassDuckRelease: 260, kickBassSplit: 180, synthLowCut: 34, synthHighCut: 9000,
+  synthCompThreshold: -24, synthCompRatio: 3, synthLimiterCeiling: -2,
+  drumDriveAmount: 0.1, drumCompThreshold: -15, drumCompRatio: 4, drumLimiterCeiling: -1,
+  // Gentle mix-bus processing: preserve the kick transient, add a trace of
+  // shared harmonic colour, and let the limiter catch only true overs.
+  eqLowGain: -1, eqMidGain: 0, eqHighGain: 1, masterSaturation: 0.025, compThreshold: -12, compRatio: 2, compAttack: 0.03, compRelease: 0.25, limiterCeiling: -1,
 };
 const defaultSampleSettings: SampleSettings = { grainRate: 0.5, grainPitch: -12, grainVolume: 0.6, grainSize: 2.0, grainDrift: 0.3, grainDensity: 4 };
 const defaultVocalSettings: VocalSettings = { pitch: 0, formant: 0, tube: 0 };
 const defaultPerformanceMacros: PerformanceMacros = { bloom: 0, weight: 0, motion: 0, distance: 0 };
-const defaultTechnoSettings: TechnoSettings = { bpm: 132, hatDensity: 68, snareDensity: 32, tomActivity: 34, evolveBars: 8, volume: 42, hatPulses: 9, snarePulses: 1, tomPulses: 2, humanize: 9, swing: 0, kickMode: 'four' };
-const defaultMelodySettings: MelodySettings = { enabled: true, root: 50, density: 48, evolveBars: 8, brightness: 36, volume: 32, duck: false, duckDepth: 62, duckRelease: 220, tranceGate: false, gateDepth: 88, gatePattern: 'eighth' };
+const defaultAfterimageSettings: AfterimageSettings = { enabled: true, memory: 62, erosion: 54, mutation: 38 };
+const defaultTechnoSettings: TechnoSettings = { bpm: 132, hatDensity: 68, snareDensity: 32, tomActivity: 34, evolveBars: 8, volume: 56, hatPulses: 9, snarePulses: 1, tomPulses: 2, humanize: 9, swing: 0, kickMode: 'four' };
+const defaultMelodySettings: MelodySettings = { enabled: true, composerEnabled: false, mode: 'hypnotic', phraseBars: 8, complexity: 46, repetition: 76, variation: 32, range: 2, contour: 'arch', progression: 'deep', noteLength: 48, root: 50, density: 48, evolveBars: 8, brightness: 36, volume: 32, duck: false, duckDepth: 62, duckRelease: 220, tranceGate: false, gateDepth: 88, gatePattern: 'eighth' };
+const emptySteps = () => Array.from({ length: 16 }, () => false);
+const defaultAcidSettings: AcidSettings = { enabled: false, cutoff: 42, resonance: 66, drive: 32, octave: 1, accent: 68, steps: [true, false, false, true, false, true, false, false, true, false, true, false, false, true, false, false], accents: [false, false, false, true, false, false, false, false, true, false, false, false, false, true, false, false] };
+const defaultLiveGrid = (): LiveGrid => ({ kicks: emptySteps(), hats: emptySteps(), snares: emptySteps(), toms: emptySteps() });
+const mixerChannelMeta: Array<{ id: MixerChannelId; label: string; color: string }> = [
+  { id: 'drone', label: 'Drone', color: '#8d7cff' }, { id: 'machine', label: 'Machine', color: '#e17055' },
+  { id: 'melody', label: 'Melody', color: '#6fc8ff' }, { id: 'acid', label: 'Acid', color: '#ffd166' },
+  { id: 'input', label: 'Input', color: '#00b894' }, { id: 'pulse', label: 'Pulse', color: '#b7ef78' },
+  { id: 'ritual', label: 'Ritual', color: '#f58ab3' }, { id: 'master', label: 'Master', color: '#ffffff' },
+];
+const defaultMixerChannel = (): MixerChannelSetting => ({ volume: 100, muted: false, low: 0, mid: 0, high: 0 });
+const defaultMixerSettings = (): MixerSettings => Object.fromEntries(mixerChannelMeta.map(({ id }) => [id, { ...defaultMixerChannel(), volume: id === 'acid' ? defaultTechnoSettings.volume : 100 }])) as MixerSettings;
+const artistScenes: Record<ArtistSceneId, ArtistScene> = {
+  longBlend: { id: 'longBlend', artist: 'Carl Cox', title: 'The Long Blend', description: 'Layered groove, broad space, and patient transitions.', settings: { reverbAmount: 0.78, delayAmount: 0.48, chorusAmount: 0.26, driveAmount: 0.055, masterVolume: 0.56 }, techno: { bpm: 130, hatPulses: 9, snarePulses: 2, tomPulses: 2, hatDensity: 74, tomActivity: 38, swing: 13, volume: 66 }, melody: { enabled: true, mode: 'hypnotic', repetition: 82, variation: 24, contour: 'wave', progression: 'deep', density: 52, brightness: 44, volume: 42 }, macros: { bloom: 52, weight: 56, motion: 38, distance: 52 }, acid: { enabled: false }, rumble: 'cavern', ritual: 58 },
+  redline: { id: 'redline', artist: 'Charlotte de Witte', title: 'Redline', description: 'Acid pressure and relentlessly rising tension.', settings: { reverbAmount: 0.44, delayAmount: 0.22, driveAmount: 0.11, filterRate: 0.1, filterDepth: 0.76, masterVolume: 0.58 }, techno: { bpm: 138, hatPulses: 12, snarePulses: 1, tomPulses: 2, hatDensity: 88, tomActivity: 44, evolveBars: 4, volume: 70 }, melody: { enabled: false, mode: 'callResponse', repetition: 86, variation: 28, contour: 'rise', progression: 'static' }, macros: { bloom: 18, weight: 78, motion: 68, distance: 18 }, acid: { enabled: true, cutoff: 64, resonance: 86, drive: 62, octave: 1, accent: 84 }, rumble: 'sub', ritual: 76 },
+  orbit: { id: 'orbit', artist: 'Jeff Mills', title: 'Orbit', description: 'Fast machine dialogue, polyrhythm, and metallic futures.', settings: { reverbAmount: 0.32, delayAmount: 0.36, delayTime: 0.47, filterRate: 0.16, filterDepth: 0.82, pitchDrift: 0.38 }, techno: { bpm: 140, hatPulses: 11, snarePulses: 3, tomPulses: 4, hatDensity: 86, snareDensity: 52, tomActivity: 76, evolveBars: 2, humanize: 4, swing: 5, volume: 64 }, melody: { enabled: true, mode: 'arpeggio', complexity: 76, repetition: 54, variation: 62, contour: 'wave', progression: 'rising', density: 68, brightness: 74, volume: 38 }, macros: { bloom: 24, weight: 50, motion: 92, distance: 28 }, acid: { enabled: true, cutoff: 48, resonance: 72, drive: 38, octave: 2, accent: 72 }, rumble: 'metal', ritual: 66 },
+  reduction: { id: 'reduction', artist: 'Richie Hawtin', title: 'Reduction', description: 'Less material, more movement: a recorded gesture becomes the arrangement.', settings: { reverbAmount: 0.56, delayAmount: 0.28, chorusAmount: 0.12, driveAmount: 0.035, filterRate: 0.04, filterDepth: 0.48 }, techno: { bpm: 128, hatPulses: 6, snarePulses: 1, tomPulses: 0, hatDensity: 62, snareDensity: 12, tomActivity: 8, evolveBars: 12, humanize: 2, swing: 0, volume: 52 }, melody: { enabled: false, mode: 'hypnotic', complexity: 24, repetition: 94, variation: 14, range: 1, contour: 'arch', progression: 'static' }, macros: { bloom: 42, weight: 40, motion: 32, distance: 48 }, acid: { enabled: false }, rumble: 'dust', ritual: 44 },
+  peakPressure: { id: 'peakPressure', artist: 'Adam Beyer', title: 'Peak Pressure', description: 'Punch, roll, rumble, and a clear route to the peak.', settings: { reverbAmount: 0.48, delayAmount: 0.2, driveAmount: 0.09, drumDriveAmount: 0.18, kickBassDuckDepth: 91, masterVolume: 0.58 }, techno: { bpm: 136, hatPulses: 12, snarePulses: 1, tomPulses: 3, hatDensity: 87, snareDensity: 28, tomActivity: 80, evolveBars: 4, humanize: 7, swing: 7, volume: 72 }, melody: { enabled: true, mode: 'callResponse', complexity: 42, repetition: 74, variation: 54, contour: 'rise', progression: 'classic', density: 28, brightness: 28, volume: 24, tranceGate: true, gatePattern: 'eighth' }, macros: { bloom: 28, weight: 88, motion: 62, distance: 22 }, acid: { enabled: false }, rumble: 'sub', ritual: 82 },
+};
 const clamp = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
 const lerp = (from: number, to: number, amount: number) => from + (to - from) * amount;
 // Evenly distributes a number of pulses around a step grid. This compact
@@ -129,6 +170,19 @@ const createTubeCurve = (amount: number) => {
     curve[index] = amount <= 0.001 ? x : (Math.tanh(x * drive * (x >= 0 ? 1.08 : 0.88)) + x * 0.08) / 1.08;
   }
   return curve;
+};
+const createMixerChannelNodes = (context: AudioContext): MixerChannelNodes => {
+  const input = context.createGain();
+  const low = context.createBiquadFilter();
+  const mid = context.createBiquadFilter();
+  const high = context.createBiquadFilter();
+  const output = context.createGain();
+  low.type = 'lowshelf'; low.frequency.value = 180; low.gain.value = 0;
+  mid.type = 'peaking'; mid.frequency.value = 1100; mid.Q.value = 0.8; mid.gain.value = 0;
+  high.type = 'highshelf'; high.frequency.value = 5200; high.gain.value = 0;
+  output.gain.value = 1;
+  input.connect(low); low.connect(mid); mid.connect(high); high.connect(output);
+  return { input, low, mid, high, output };
 };
 const createDroneReverb = (context: AudioContext, duration = 4.2) => {
   const convolver = context.createConvolver();
@@ -224,6 +278,8 @@ export default function DroneEnginePage() {
   const [technoPreset, setTechnoPreset] = useState<TechnoPresetName | 'mix'>('classic');
   const [melodySettings, setMelodySettings] = useState<MelodySettings>(defaultMelodySettings);
   const [melodyEvolution, setMelodyEvolution] = useState(0);
+  const [melodyComposition, setMelodyComposition] = useState<MelodyComposition | null>(null);
+  const [melodyActiveBar, setMelodyActiveBar] = useState(0);
   const [technoPlaying, setTechnoPlaying] = useState(false);
   const [technoEvolution, setTechnoEvolution] = useState(0);
 
@@ -255,10 +311,34 @@ export default function DroneEnginePage() {
   const [morphSeconds, setMorphSeconds] = useState(45);
   const [morphTarget, setMorphTarget] = useState<'a' | 'b' | null>(null);
   const [morphProgress, setMorphProgress] = useState(0);
+  const [afterimage, setAfterimage] = useState<AfterimageSettings>(defaultAfterimageSettings);
+  const [rumbleDna, setRumbleDna] = useState<RumbleDna>('cavern');
+  const [ritualIntensity, setRitualIntensity] = useState(52);
+  const [ritualStatus, setRitualStatus] = useState('Listening to the last 30 seconds');
+  const [blackoutMode, setBlackoutMode] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
+  // Performance additions stay alongside the existing patch: they are silent
+  // until explicitly armed, so the original instrument always opens unchanged.
+  const [acidSettings, setAcidSettings] = useState<AcidSettings>(defaultAcidSettings);
+  const [liveGrid, setLiveGrid] = useState<LiveGrid>(defaultLiveGrid);
+  const [liveGridArmed, setLiveGridArmed] = useState(false);
+  const [activeArtistScene, setActiveArtistScene] = useState<ArtistSceneId | null>(null);
+  const [conductorBars, setConductorBars] = useState(16);
+  const [conductorTarget, setConductorTarget] = useState<ArtistSceneId | null>(null);
+  const [conductorProgress, setConductorProgress] = useState(0);
+  const [gestureFrames, setGestureFrames] = useState<GestureFrame[]>([]);
+  const [gestureRecording, setGestureRecording] = useState(false);
+  const [gesturePlaying, setGesturePlaying] = useState(false);
+  const [deckLevels, setDeckLevels] = useState({ groove: defaultTechnoSettings.volume, melodic: defaultMelodySettings.volume, atmosphere: 54 });
+  const [deckFocus, setDeckFocus] = useState<'groove' | 'melodic' | 'atmosphere' | null>(null);
+  const [mixBoardOpen, setMixBoardOpen] = useState(false);
+  const [mixerSettings, setMixerSettings] = useState<MixerSettings>(defaultMixerSettings);
+  const [masterMeter, setMasterMeter] = useState<MasterMeter>({ compressor: 0, limiter: 0 });
 
   const graphRef = useRef<Graph | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const masteringCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const masterMeterTickRef = useRef(0);
   const sampleWaveformRef = useRef<HTMLCanvasElement | null>(null);
   const settingsRef = useRef(settings);
   const sampleSettingsRef = useRef(sampleSettings);
@@ -289,16 +369,36 @@ export default function DroneEnginePage() {
   const technoBarRef = useRef(0);
   const technoPatternRef = useRef<TechnoPattern>({ kicks: euclideanSteps(4), hats: euclideanSteps(defaultTechnoSettings.hatPulses), snares: euclideanSteps(defaultTechnoSettings.snarePulses, 16, 12), ghostSnares: new Set(), toms: new Set(), hatChance: 0.68 });
   const melodyPhraseRef = useRef<Array<number | null>>(Array(16).fill(null));
+  const melodyCompositionRef = useRef<MelodyComposition | null>(null);
+  const melodyActiveBarRef = useRef(0);
   const midiClockRef = useRef({ ticks: 0, startedAt: 0 });
   const frozenVoicesRef = useRef<Map<number, FrozenVoice>>(new Map());
   const frozenVoiceIdRef = useRef(0);
   const morphTimerRef = useRef<number | null>(null);
   const morphVersionRef = useRef(0);
+  const acidSettingsRef = useRef(acidSettings);
+  const acidLastFrequencyRef = useRef<number | null>(null);
+  const liveGridRef = useRef(liveGrid);
+  const liveGridArmedRef = useRef(liveGridArmed);
+  const conductorTimerRef = useRef<number | null>(null);
+  const conductorVersionRef = useRef(0);
+  const gestureFramesRef = useRef<GestureFrame[]>([]);
+  const gestureRecordStartRef = useRef(0);
+  const gesturePlaybackTimerRef = useRef<number | null>(null);
 
   const recordedLeftRef = useRef<Float32Array[]>([]);
   const recordedRightRef = useRef<Float32Array[]>([]);
   const recordStartRef = useRef(0);
   const recordTickRef = useRef<number | null>(null);
+  const ritualLeftRef = useRef<Float32Array[]>([]);
+  const ritualRightRef = useRef<Float32Array[]>([]);
+  const afterimageRef = useRef(afterimage);
+  const rumbleDnaRef = useRef(rumbleDna);
+  const afterimageStepRef = useRef(0);
+  const ritualPressTimerRef = useRef<number | null>(null);
+  const ritualTapTimerRef = useRef<number | null>(null);
+  const ritualLongPressRef = useRef(false);
+  const ritualNextSceneRef = useRef<'a' | 'b'>('a');
 
   const micRecorderRef = useRef<MediaRecorder | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
@@ -314,6 +414,11 @@ export default function DroneEnginePage() {
   useEffect(() => { sampleSettingsRef.current = sampleSettings; }, [sampleSettings]);
   useEffect(() => { samplePositionRef.current = samplePosition; }, [samplePosition]);
   useEffect(() => { sampleActiveRef.current = sampleActive; }, [sampleActive]);
+  useEffect(() => { afterimageRef.current = afterimage; }, [afterimage]);
+  useEffect(() => { rumbleDnaRef.current = rumbleDna; }, [rumbleDna]);
+  useEffect(() => { acidSettingsRef.current = acidSettings; }, [acidSettings]);
+  useEffect(() => { liveGridRef.current = liveGrid; }, [liveGrid]);
+  useEffect(() => { liveGridArmedRef.current = liveGridArmed; }, [liveGridArmed]);
   useEffect(() => {
     midiModeRef.current = midiMode;
     if (midiMode !== 'root') { midiRootNoteRef.current = null; midiHeldRootsRef.current.clear(); }
@@ -332,15 +437,32 @@ export default function DroneEnginePage() {
       return graphRef.current;
     }
     const context = new AudioContext();
+    const mixerChannels = Object.fromEntries(mixerChannelMeta.map(({ id }) => [id, createMixerChannelNodes(context)])) as Record<MixerChannelId, MixerChannelNodes>;
     const master = context.createGain();
     const eqLow = context.createBiquadFilter();
     const eqMid = context.createBiquadFilter();
     const eqHigh = context.createBiquadFilter();
+    const masterDrive = context.createWaveShaper();
     const compressor = context.createDynamicsCompressor();
     const limiter = context.createDynamicsCompressor();
     const analyser = context.createAnalyser();
+    const ritualProcessor = context.createScriptProcessor(4096, 2, 2);
     const droneMaster = context.createGain();
     const droneBus = context.createGain();
+    const synthBus = context.createGain();
+    const synthBassFilter = context.createBiquadFilter();
+    const synthBassDuckGain = context.createGain();
+    const synthPresenceFilter = context.createBiquadFilter();
+    const synthMixBus = context.createGain();
+    const synthDuckGain = context.createGain();
+    const synthLowCut = context.createBiquadFilter();
+    const synthHighCut = context.createBiquadFilter();
+    const synthCompressor = context.createDynamicsCompressor();
+    const synthLimiter = context.createDynamicsCompressor();
+    const drumBus = context.createGain();
+    const drumDrive = context.createWaveShaper();
+    const drumCompressor = context.createDynamicsCompressor();
+    const drumLimiter = context.createDynamicsCompressor();
     const technoGain = context.createGain();
     const melodyGain = context.createGain();
     const melodyDuckGain = context.createGain();
@@ -390,8 +512,9 @@ export default function DroneEnginePage() {
     droneDelayFilter.type = 'lowpass';
     droneDelayFilter.frequency.value = 2400;
     droneDelayFilter.Q.value = 0.5;
-    // Mastering: a simple 3-band EQ, then a compressor for glue, then a
-    // fast brickwall limiter as the final safety net before output.
+    // Master Glue: trim excess weight, add a near-imperceptible shared colour,
+    // then use a slow, low-ratio compressor so transients can still lead the
+    // groove. The limiter is only a final safety net.
     eqLow.type = 'lowshelf';
     eqLow.frequency.value = 200;
     eqLow.gain.value = defaultDroneSettings.eqLowGain;
@@ -402,11 +525,13 @@ export default function DroneEnginePage() {
     eqHigh.type = 'highshelf';
     eqHigh.frequency.value = 4000;
     eqHigh.gain.value = defaultDroneSettings.eqHighGain;
+    masterDrive.curve = createDriveCurve(defaultDroneSettings.masterSaturation);
+    masterDrive.oversample = '2x';
     compressor.threshold.value = defaultDroneSettings.compThreshold;
     compressor.knee.value = 24;
     compressor.ratio.value = defaultDroneSettings.compRatio;
-    compressor.attack.value = 0.02;
-    compressor.release.value = 0.35;
+    compressor.attack.value = defaultDroneSettings.compAttack;
+    compressor.release.value = defaultDroneSettings.compRelease;
     limiter.threshold.value = defaultDroneSettings.limiterCeiling;
     limiter.knee.value = 0;
     limiter.ratio.value = 20;
@@ -414,8 +539,57 @@ export default function DroneEnginePage() {
     limiter.release.value = 0.1;
     analyser.fftSize = 512;
     analyser.smoothingTimeConstant = 0.85;
+    // A rolling, post-master buffer turns the recent performance into a new
+    // granular source on demand. It stays out of the export signal path.
+    ritualProcessor.onaudioprocess = (event) => {
+      const left = event.inputBuffer.getChannelData(0);
+      const right = event.inputBuffer.numberOfChannels > 1 ? event.inputBuffer.getChannelData(1) : left;
+      ritualLeftRef.current.push(new Float32Array(left));
+      ritualRightRef.current.push(new Float32Array(right));
+      const maxChunks = Math.ceil(context.sampleRate * 30 / event.inputBuffer.length);
+      if (ritualLeftRef.current.length > maxChunks) ritualLeftRef.current.shift();
+      if (ritualRightRef.current.length > maxChunks) ritualRightRef.current.shift();
+      event.outputBuffer.getChannelData(0).set(left);
+      event.outputBuffer.getChannelData(1).set(right);
+    };
     droneDry.gain.value = 1 - defaultDroneSettings.reverbAmount * 0.5;
     droneMaster.gain.value = defaultDroneSettings.masterVolume;
+    synthBassFilter.type = 'lowpass';
+    synthBassFilter.frequency.value = defaultDroneSettings.kickBassSplit;
+    synthBassFilter.Q.value = 0.7;
+    synthBassDuckGain.gain.value = 1;
+    synthPresenceFilter.type = 'highpass';
+    synthPresenceFilter.frequency.value = defaultDroneSettings.kickBassSplit;
+    synthPresenceFilter.Q.value = 0.7;
+    synthDuckGain.gain.value = 1;
+    synthLowCut.type = 'highpass';
+    synthLowCut.frequency.value = defaultDroneSettings.synthLowCut;
+    synthLowCut.Q.value = 0.7;
+    synthHighCut.type = 'lowpass';
+    synthHighCut.frequency.value = defaultDroneSettings.synthHighCut;
+    synthHighCut.Q.value = 0.7;
+    synthCompressor.threshold.value = defaultDroneSettings.synthCompThreshold;
+    synthCompressor.knee.value = 18;
+    synthCompressor.ratio.value = defaultDroneSettings.synthCompRatio;
+    synthCompressor.attack.value = 0.02;
+    synthCompressor.release.value = 0.28;
+    synthLimiter.threshold.value = defaultDroneSettings.synthLimiterCeiling;
+    synthLimiter.knee.value = 0;
+    synthLimiter.ratio.value = 20;
+    synthLimiter.attack.value = 0.001;
+    synthLimiter.release.value = 0.1;
+    drumDrive.curve = createDriveCurve(defaultDroneSettings.drumDriveAmount);
+    drumDrive.oversample = '2x';
+    drumCompressor.threshold.value = defaultDroneSettings.drumCompThreshold;
+    drumCompressor.knee.value = 10;
+    drumCompressor.ratio.value = defaultDroneSettings.drumCompRatio;
+    drumCompressor.attack.value = 0.008;
+    drumCompressor.release.value = 0.12;
+    drumLimiter.threshold.value = defaultDroneSettings.drumLimiterCeiling;
+    drumLimiter.knee.value = 0;
+    drumLimiter.ratio.value = 20;
+    drumLimiter.attack.value = 0.001;
+    drumLimiter.release.value = 0.08;
     technoGain.gain.value = defaultTechnoSettings.volume / 100;
     melodyGain.gain.value = defaultMelodySettings.volume / 100;
     melodyDuckGain.gain.value = 1;
@@ -468,9 +642,10 @@ export default function DroneEnginePage() {
     sampleFormantFilters[2].connect(sampleTubeDrive);
     sampleTubeDrive.connect(sampleTubeTone);
     sampleTubeTone.connect(sampleFilter);
-    sampleFilter.connect(droneDry);
-    sampleFilter.connect(droneReverbPreDelay);
-    sampleFilter.connect(droneDelay);
+    sampleFilter.connect(mixerChannels.input.input);
+    mixerChannels.input.output.connect(droneDry);
+    mixerChannels.input.output.connect(droneReverbPreDelay);
+    mixerChannels.input.output.connect(droneDelay);
 
     // Pulse: a single persistent sub oscillator gated by short envelope hits
     // scheduled on ratio-based steps — silent until a pattern is selected.
@@ -481,8 +656,10 @@ export default function DroneEnginePage() {
     pulseGain.gain.value = 0;
     pulseOsc.connect(pulseFilter);
     pulseFilter.connect(pulseGain);
-    pulseGain.connect(droneDry);
-    pulseGain.connect(droneReverbPreDelay);
+    pulseGain.connect(mixerChannels.pulse.input);
+    mixerChannels.pulse.output.connect(droneDry);
+    mixerChannels.pulse.output.connect(droneReverbPreDelay);
+    mixerChannels.pulse.output.connect(droneDelay);
     pulseOsc.start();
 
     // Wander: a very slow LFO fanned out to reverb send, tone brightness,
@@ -507,50 +684,81 @@ export default function DroneEnginePage() {
     droneChorusLfo.start();
     droneNoise.connect(droneNoiseFilter);
     droneNoiseFilter.connect(droneNoiseGain);
-    droneNoiseGain.connect(droneDry);
-    droneNoiseGain.connect(droneReverbPreDelay);
-    droneNoiseGain.connect(droneDelay);
+    droneNoiseGain.connect(mixerChannels.drone.input);
+    mixerChannels.drone.output.connect(droneDry);
+    mixerChannels.drone.output.connect(droneReverbPreDelay);
+    mixerChannels.drone.output.connect(droneDelay);
     droneNoise.start();
     master.connect(eqLow);
     eqLow.connect(eqMid);
     eqMid.connect(eqHigh);
     eqHigh.connect(toneHigh);
     toneHigh.connect(toneLow);
-    toneLow.connect(compressor);
+    toneLow.connect(masterDrive);
+    masterDrive.connect(compressor);
     compressor.connect(limiter);
-    limiter.connect(analyser);
+    limiter.connect(ritualProcessor);
+    ritualProcessor.connect(analyser);
     analyser.connect(context.destination);
-    droneDry.connect(droneBus);
-    technoGain.connect(droneBus);
-    melodyGain.connect(melodyDuckGain);
+    // The generative synth, input, and their effect returns stay on a
+    // separate bus. This lets a kick make space without ducking itself or
+    // the whole master mix, while the high-pass clears inaudible sub-rumble.
+    droneDry.connect(synthBus);
+    technoGain.connect(mixerChannels.machine.input);
+    mixerChannels.machine.output.connect(drumBus);
+    mixerChannels.machine.output.connect(rumbleSend);
+    mixerChannels.acid.output.connect(drumBus);
+    mixerChannels.acid.output.connect(rumbleSend);
+    mixerChannels.ritual.output.connect(drumBus);
+    mixerChannels.ritual.output.connect(rumbleSend);
+    melodyGain.connect(mixerChannels.melody.input);
+    mixerChannels.melody.output.connect(melodyDuckGain);
     melodyDuckGain.connect(melodyGateGain);
     melodyGateGain.connect(droneBus);
     rumbleSend.connect(rumbleReverb);
     rumbleReverb.connect(rumbleFilter);
     rumbleFilter.connect(rumbleGain);
-    rumbleGain.connect(droneBus);
+    rumbleGain.connect(drumBus);
     droneReverbPreDelay.connect(droneReverb);
     droneReverb.connect(droneReverbWet);
-    droneReverbWet.connect(droneBus);
+    droneReverbWet.connect(synthBus);
     droneDelay.connect(droneDelayWet);
-    droneDelayWet.connect(droneBus);
+    droneDelayWet.connect(synthBus);
     droneDelayWet.connect(droneReverbPreDelay);
+    // Split the synth at the kick's body frequency: only the bass band gets
+    // a deep duck, while a lighter full-band dip keeps the transient clear.
+    synthBus.connect(synthBassFilter);
+    synthBassFilter.connect(synthBassDuckGain);
+    synthBassDuckGain.connect(synthMixBus);
+    synthBus.connect(synthPresenceFilter);
+    synthPresenceFilter.connect(synthMixBus);
+    synthMixBus.connect(synthDuckGain);
+    synthDuckGain.connect(synthLowCut);
+    synthLowCut.connect(synthHighCut);
+    synthHighCut.connect(synthCompressor);
+    synthCompressor.connect(synthLimiter);
+    synthLimiter.connect(droneBus);
+    drumBus.connect(drumDrive);
+    drumDrive.connect(drumCompressor);
+    drumCompressor.connect(drumLimiter);
+    drumLimiter.connect(droneBus);
     droneBus.connect(droneDrive);
     droneDrive.connect(droneChorusDry);
     droneDrive.connect(droneChorusDelay);
     droneChorusDelay.connect(droneChorusWet);
     droneChorusDry.connect(droneMaster);
     droneChorusWet.connect(droneMaster);
-    droneMaster.connect(master);
+    droneMaster.connect(mixerChannels.master.input);
+    mixerChannels.master.output.connect(master);
 
     graphRef.current = {
-      context, master, toneHigh, toneLow, compressor, analyser, eqLow, eqMid, eqHigh, limiter, droneMaster, droneBus, droneDrive, droneChorusDry, droneChorusDelay, droneChorusWet, droneChorusLfo, droneChorusDepth, technoGain, melodyGain, melodyDuckGain, melodyGateGain, rumbleSend, rumbleReverb, rumbleFilter, rumbleGain,
+      context, master, toneHigh, toneLow, masterDrive, compressor, analyser, eqLow, eqMid, eqHigh, limiter, droneMaster, droneBus, synthBus, synthBassFilter, synthBassDuckGain, synthPresenceFilter, synthMixBus, synthDuckGain, synthLowCut, synthHighCut, synthCompressor, synthLimiter, droneDrive, droneChorusDry, droneChorusDelay, droneChorusWet, droneChorusLfo, droneChorusDepth, drumBus, drumDrive, drumCompressor, drumLimiter, technoGain, melodyGain, melodyDuckGain, melodyGateGain, rumbleSend, rumbleReverb, rumbleFilter, rumbleGain,
       droneDry, droneReverb, droneReverbPreDelay, droneReverbWet, droneDelay, droneDelayFilter, droneDelayFeedback, droneDelayWet, droneNoise, droneNoiseFilter, droneNoiseGain,
       droneVoices: new Map(),
       sampleGain, sampleFilter, sampleFormantFilters, sampleTubeDrive, sampleTubeTone, sampleBuffer: null, sampleOriginalBuffer: null, loopSource: null, granularTimer: null,
-      recordProcessor: null,
+      recordProcessor: null, ritualProcessor,
       pulseOsc, pulseGain, pulseFilter, pulseTimer: null, pulseStep: 0,
-      wanderLfo, wanderReverbGain, wanderToneGain, wanderChorusGain,
+      wanderLfo, wanderReverbGain, wanderToneGain, wanderChorusGain, mixerChannels,
     };
     await context.resume();
     return graphRef.current;
@@ -648,7 +856,7 @@ export default function DroneEnginePage() {
     const panLfoGain = graph.context.createGain();
     panLfoGain.gain.value = current.modulationShape === 'sine' ? current.panDepth : 0;
     panLfo.connect(panLfoGain); panLfoGain.connect(panner.pan); panLfo.start();
-    filter.connect(voiceGain); voiceGain.connect(panner); panner.connect(graph.droneDry); panner.connect(graph.droneReverbPreDelay); panner.connect(graph.droneDelay);
+    filter.connect(voiceGain); voiceGain.connect(panner); panner.connect(graph.mixerChannels.drone.input);
     const attackTime = 3 + nextRandom() * 5;
     const releaseTime = 6 + nextRandom() * 8;
     const sustainLevel = 0.14 + nextRandom() * 0.08;
@@ -867,7 +1075,7 @@ export default function DroneEnginePage() {
       subGain.gain.value = 0.22;
       subOsc.connect(subGain); subGain.connect(filter); subOsc.start();
       filter.connect(gain); gain.connect(panner);
-      panner.connect(graph.droneDry); panner.connect(graph.droneReverbPreDelay); panner.connect(graph.droneDelay);
+      panner.connect(graph.mixerChannels.drone.input);
       frozenVoicesRef.current.set(frozenVoiceIdRef.current += 1, { oscillators, subOsc, gain, filter, panner });
     });
     setFreezeActive(true);
@@ -914,7 +1122,9 @@ export default function DroneEnginePage() {
       const interpolatedSettings = Object.fromEntries(Object.entries(source.settings).map(([key, value]) => {
         if (typeof value !== 'number') return [key, amount < 1 ? value : target.settings[key as keyof DroneSettings]];
         const next = lerp(value, target.settings[key as keyof DroneSettings] as number, amount);
-        return [key, key === 'oscCount' || key === 'maxVoices' ? Math.round(next) : next];
+        // Pitch crosses discrete semitone shelves while the surrounding
+        // timbre flows, creating the slow voice-leading of a tectonic shift.
+        return [key, key === 'basePitch' || key === 'oscCount' || key === 'maxVoices' ? Math.round(next) : next];
       })) as DroneSettings;
       setSettings(interpolatedSettings);
       setMacros({ bloom: lerp(source.macros.bloom, target.macros.bloom, amount), weight: lerp(source.macros.weight, target.macros.weight, amount), motion: lerp(source.macros.motion, target.macros.motion, amount), distance: lerp(source.macros.distance, target.macros.distance, amount) });
@@ -932,6 +1142,20 @@ export default function DroneEnginePage() {
 
   const updateSetting = <K extends keyof DroneSettings>(key: K, value: DroneSettings[K]) => {
     setSettings((previous) => ({ ...previous, [key]: value }));
+  };
+  const applyMasterGlue = () => {
+    setSettings((previous) => ({
+      ...previous,
+      eqLowGain: -1,
+      eqMidGain: 0,
+      eqHighGain: 1,
+      masterSaturation: 0.025,
+      compThreshold: -12,
+      compRatio: 2,
+      compAttack: 0.03,
+      compRelease: 0.25,
+      limiterCeiling: -1,
+    }));
   };
   const updateSampleSetting = <K extends keyof SampleSettings>(key: K, value: SampleSettings[K]) => {
     setSampleSettings((previous) => ({ ...previous, [key]: value }));
@@ -960,11 +1184,29 @@ export default function DroneEnginePage() {
     const pitchDrift = clamp(settings.pitchDrift + motion * 0.16, 0, 1);
     const panDepth = clamp(settings.panDepth + motion * 0.28, 0, 1);
     graph.droneMaster.gain.setTargetAtTime(settings.masterVolume, now, 0.08);
+    graph.synthBassFilter.frequency.setTargetAtTime(settings.kickBassSplit, now, 0.08);
+    graph.synthPresenceFilter.frequency.setTargetAtTime(settings.kickBassSplit, now, 0.08);
+    graph.synthLowCut.frequency.setTargetAtTime(settings.synthLowCut, now, 0.08);
+    graph.synthHighCut.frequency.setTargetAtTime(settings.synthHighCut, now, 0.08);
+    if (!settings.kickSpace) {
+      graph.synthDuckGain.gain.setTargetAtTime(1, now, 0.04);
+      graph.synthBassDuckGain.gain.setTargetAtTime(1, now, 0.04);
+    }
+    graph.synthCompressor.threshold.setTargetAtTime(settings.synthCompThreshold, now, 0.1);
+    graph.synthCompressor.ratio.setTargetAtTime(settings.synthCompRatio, now, 0.1);
+    graph.synthLimiter.threshold.setTargetAtTime(settings.synthLimiterCeiling, now, 0.1);
+    graph.drumCompressor.threshold.setTargetAtTime(settings.drumCompThreshold, now, 0.1);
+    graph.drumCompressor.ratio.setTargetAtTime(settings.drumCompRatio, now, 0.1);
+    graph.drumLimiter.threshold.setTargetAtTime(settings.drumLimiterCeiling, now, 0.1);
+    graph.drumDrive.curve = createDriveCurve(settings.drumDriveAmount);
     graph.eqLow.gain.setTargetAtTime(settings.eqLowGain + weight * 4.5, now, 0.1);
     graph.eqMid.gain.setTargetAtTime(settings.eqMidGain, now, 0.1);
     graph.eqHigh.gain.setTargetAtTime(settings.eqHighGain, now, 0.1);
+    graph.masterDrive.curve = createDriveCurve(settings.masterSaturation);
     graph.compressor.threshold.setTargetAtTime(settings.compThreshold, now, 0.1);
     graph.compressor.ratio.setTargetAtTime(settings.compRatio, now, 0.1);
+    graph.compressor.attack.setTargetAtTime(settings.compAttack, now, 0.1);
+    graph.compressor.release.setTargetAtTime(settings.compRelease, now, 0.1);
     graph.limiter.threshold.setTargetAtTime(settings.limiterCeiling, now, 0.1);
     const spaceToneCut = patchCables.spaceToTone ? reverbAmount * 1700 + delayAmount * 800 + distance * 850 : 0;
     const modToSpaceAmount = patchCables.modToSpace ? filterDepth * 0.12 : 0;
@@ -1120,6 +1362,41 @@ export default function DroneEnginePage() {
     setSampleStatus('Loop');
   }, [stopLoop]);
 
+  const captureRitual = useCallback(async () => {
+    const graph = await ensureAudio();
+    const totalLength = ritualLeftRef.current.reduce((sum, chunk) => sum + chunk.length, 0);
+    const captureLength = Math.min(totalLength, Math.floor(graph.context.sampleRate * 12));
+    if (captureLength < graph.context.sampleRate) {
+      setRitualStatus('Keep playing — Ritual needs one second of sound');
+      return;
+    }
+    const buffer = graph.context.createBuffer(2, captureLength, graph.context.sampleRate);
+    const startAt = totalLength - captureLength;
+    let offset = 0;
+    let written = 0;
+    ritualLeftRef.current.forEach((chunk, index) => {
+      const end = offset + chunk.length;
+      const from = Math.max(0, startAt - offset);
+      const to = Math.min(chunk.length, startAt + captureLength - offset);
+      if (to > from) {
+        buffer.getChannelData(0).set(chunk.subarray(from, to), written);
+        buffer.getChannelData(1).set(ritualRightRef.current[index]?.subarray(from, to) ?? chunk.subarray(from, to), written);
+        written += to - from;
+      }
+      offset = end;
+    });
+    graph.sampleBuffer = buffer;
+    graph.sampleOriginalBuffer = buffer;
+    samplePositionRef.current = 0;
+    granularPositionRef.current = 0;
+    sampleActiveRef.current = true;
+    setSamplePosition(0); setSampleActive(true); setSampleLoaded(true);
+    setSampleName('Ritual capture — last 12 seconds');
+    setSampleMeta(`${Math.round(graph.context.sampleRate)} Hz • stereo • self-captured performance`);
+    setRitualStatus('Ritual captured — granular memory is alive');
+    startGranular();
+  }, [ensureAudio, startGranular]);
+
   const stopSampleEngine = useCallback(() => {
     stopGranular();
     stopLoop();
@@ -1206,13 +1483,14 @@ export default function DroneEnginePage() {
       const next = !previous;
       const graph = graphRef.current;
       if (graph) {
-        try { graph.sampleFilter.disconnect(); } catch {}
+        const inputOutput = graph.mixerChannels.input.output;
+        try { inputOutput.disconnect(); } catch {}
         if (next) {
-          graph.sampleFilter.connect(graph.droneDry);
-          graph.sampleFilter.connect(graph.droneReverbPreDelay);
-          graph.sampleFilter.connect(graph.droneDelay);
+          inputOutput.connect(graph.droneDry);
+          inputOutput.connect(graph.droneReverbPreDelay);
+          inputOutput.connect(graph.droneDelay);
         } else {
-          graph.sampleFilter.connect(graph.master);
+          inputOutput.connect(graph.mixerChannels.master.input);
         }
       }
       return next;
@@ -1459,7 +1737,7 @@ export default function DroneEnginePage() {
     const processor = graph.recordProcessor;
     try { graph.limiter.disconnect(); } catch {}
     try { processor.disconnect(); } catch {}
-    graph.limiter.connect(graph.analyser);
+    graph.limiter.connect(graph.ritualProcessor);
     graph.recordProcessor = null;
     setIsRecording(false);
     setRecordStatus('Encoding MP3…');
@@ -1506,9 +1784,26 @@ export default function DroneEnginePage() {
   // is a nearby degree of the selected scale, while a stable portion of the
   // previous phrase remains in place. The result evolves by voice-leading,
   // rather than spraying unrelated notes into the mix.
+  const buildComposerPhrase = useCallback((current: MelodySettings, preserveMotif: boolean) => {
+    const scaleLength = droneScales[settingsRef.current.scale].intervals.length;
+    const input = { seed: Math.floor(nextRandom() * 0xffffffff), scaleLength, settings: current };
+    const composition = preserveMotif && melodyCompositionRef.current
+      ? mutateComposition(melodyCompositionRef.current, input)
+      : composeMelody(input);
+    melodyCompositionRef.current = composition;
+    melodyActiveBarRef.current = 0;
+    setMelodyComposition(composition);
+    setMelodyActiveBar(0);
+    setMelodyEvolution((count) => count + 1);
+  }, [nextRandom]);
+
   const evolveMelodyPhrase = useCallback((preserveMotif = true) => {
     const current = melodySettingsRef.current;
     const scale = droneScales[settingsRef.current.scale].intervals;
+    if (current.composerEnabled) {
+      buildComposerPhrase(current, preserveMotif);
+      return;
+    }
     const phrase: Array<number | null> = Array(16).fill(null);
     const noteCount = clamp(Math.round(2 + (current.density / 100) * 6), 2, 8);
     const positions = Array.from(euclideanSteps(noteCount, 16, Math.floor(nextRandom() * 4))).sort((a, b) => a - b);
@@ -1529,29 +1824,51 @@ export default function DroneEnginePage() {
     });
     melodyPhraseRef.current = phrase;
     setMelodyEvolution((count) => count + 1);
-  }, [nextRandom]);
+  }, [buildComposerPhrase, nextRandom]);
 
-  const playScaleLockedMelody = useCallback((graph: Graph, degree: number, lateMs = 0) => {
+  const updateComposerSetting = useCallback(<K extends keyof ComposerSettings>(key: K, value: ComposerSettings[K]) => {
+    const next = { ...melodySettingsRef.current, [key]: value };
+    melodySettingsRef.current = next;
+    setMelodySettings(next);
+  }, []);
+
+  const toggleMelodyComposer = useCallback(() => {
+    const current = melodySettingsRef.current;
+    const next = { ...current, composerEnabled: !current.composerEnabled };
+    melodySettingsRef.current = next;
+    setMelodySettings(next);
+  }, []);
+
+  useEffect(() => {
+    if (!melodySettings.composerEnabled) return;
+    buildComposerPhrase(melodySettingsRef.current, false);
+  }, [buildComposerPhrase, melodySettings.composerEnabled, melodySettings.complexity, melodySettings.contour, melodySettings.mode, melodySettings.noteLength, melodySettings.phraseBars, melodySettings.progression, melodySettings.range, melodySettings.repetition, melodySettings.variation, settings.scale]);
+
+  const playScaleLockedMelody = useCallback((graph: Graph, degree: number, lateMs = 0, composedNote?: MelodyNote) => {
     const current = melodySettingsRef.current;
     const scale = droneScales[settingsRef.current.scale].intervals;
     const scaleDegree = ((degree % scale.length) + scale.length) % scale.length;
     const octave = Math.floor(degree / scale.length);
     const frequency = freqForSemitone(current.root + scale[scaleDegree] + octave * 12);
     const now = graph.context.currentTime + lateMs * 0.001;
-    const duration = Math.min(0.62, 60 / technoSettingsRef.current.bpm * 1.08);
+    const legacyDuration = Math.min(0.62, 60 / technoSettingsRef.current.bpm * 1.08);
+    const sixteenth = 60 / technoSettingsRef.current.bpm / 4;
+    const duration = composedNote ? Math.min(1.8, sixteenth * composedNote.gate) : legacyDuration;
     const filter = graph.context.createBiquadFilter();
     const gain = graph.context.createGain();
     const body = graph.context.createOscillator();
     const air = graph.context.createOscillator();
     filter.type = 'lowpass';
-    filter.frequency.value = 620 + current.brightness * 32;
-    filter.Q.value = 0.65;
-    body.type = 'triangle'; body.frequency.value = frequency;
-    air.type = 'sine'; air.frequency.value = frequency * 2;
+    const answer = composedNote?.role === 'answer';
+    filter.frequency.value = 620 + current.brightness * 32 + (composedNote?.accent ? 720 : 0);
+    filter.Q.value = answer ? 1.8 : 0.65;
+    body.type = answer ? 'sine' : current.mode === 'arpeggio' && current.composerEnabled ? 'sawtooth' : 'triangle'; body.frequency.value = frequency;
+    air.type = 'sine'; air.frequency.value = frequency * (answer ? 3 : 2);
     const airGain = graph.context.createGain();
     airGain.gain.value = 0.09;
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.28, now + 0.035);
+    const peak = 0.28 * (composedNote?.velocity ?? 1) * (composedNote?.accent ? 1.12 : 1);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.035, peak), now + (answer ? 0.018 : 0.035));
     gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
     body.connect(filter); air.connect(airGain); airGain.connect(filter); filter.connect(gain); gain.connect(graph.melodyGain);
     body.start(now); air.start(now); body.stop(now + duration + 0.03); air.stop(now + duration + 0.03);
@@ -1567,6 +1884,55 @@ export default function DroneEnginePage() {
     graph.melodyDuckGain.gain.setValueAtTime(floor, now);
     graph.melodyDuckGain.gain.exponentialRampToValueAtTime(1, now + releaseSeconds);
   }, []);
+
+  const triggerSynthDuck = useCallback((graph: Graph) => {
+    const current = settingsRef.current;
+    if (!current.kickSpace) return;
+    const now = graph.context.currentTime;
+    // The low band makes the largest hole for the kick's weight. A subtle
+    // full-band duck then reveals the attack without hollowing out the pad.
+    const duck = (gain: AudioParam, depth: number, releaseMs: number, amount: number) => {
+      const floor = Math.max(0.06, 1 - depth / 100 * amount);
+      gain.cancelScheduledValues(now);
+      gain.setValueAtTime(Math.max(0.0001, gain.value), now);
+      gain.exponentialRampToValueAtTime(floor, now + 0.008);
+      gain.exponentialRampToValueAtTime(1, now + 0.008 + releaseMs / 1000);
+    };
+    duck(graph.synthBassDuckGain.gain, current.kickBassDuckDepth, current.kickBassDuckRelease, 0.92);
+    duck(graph.synthDuckGain.gain, current.kickDuckDepth, current.kickDuckRelease, 0.86);
+  }, []);
+
+  const triggerAfterimage = useCallback((graph: Graph) => {
+    const current = afterimageRef.current;
+    if (!current.enabled) return;
+    const dna = rumbleDnaRef.current;
+    const now = graph.context.currentTime + 0.045;
+    const scale = droneScales[settingsRef.current.scale].intervals;
+    const mutationRange = Math.max(1, Math.round(current.mutation / 100 * 5));
+    afterimageStepRef.current += 1;
+    const degree = (afterimageStepRef.current * mutationRange + Math.floor(nextRandom() * (mutationRange + 1))) % scale.length;
+    const profile = dna === 'cavern' ? { type: 'triangle' as OscillatorType, cutoff: 170, resonance: 1.5, length: 1.25, level: 0.13 }
+      : dna === 'metal' ? { type: 'sine' as OscillatorType, cutoff: 680, resonance: 7, length: 0.46, level: 0.08 }
+        : dna === 'dust' ? { type: 'sawtooth' as OscillatorType, cutoff: 360, resonance: 2.8, length: 0.72, level: 0.06 }
+          : { type: 'sine' as OscillatorType, cutoff: 125, resonance: 0.8, length: 0.88, level: 0.16 };
+    const duration = profile.length * (0.45 + current.erosion / 100 * 1.15);
+    const oscillator = graph.context.createOscillator();
+    const filter = graph.context.createBiquadFilter();
+    const gain = graph.context.createGain();
+    oscillator.type = profile.type;
+    oscillator.frequency.setValueAtTime(freqForSemitone(settingsRef.current.basePitch - 12 + scale[degree]), now);
+    oscillator.detune.value = (nextRandom() - 0.5) * current.mutation * 0.45;
+    filter.type = 'lowpass';
+    filter.frequency.value = profile.cutoff + current.mutation * 4;
+    filter.Q.value = profile.resonance;
+    const peak = profile.level * (0.28 + current.memory / 100 * 0.72);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.035);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    oscillator.connect(filter); filter.connect(gain); gain.connect(graph.mixerChannels.ritual.input);
+    oscillator.start(now); oscillator.stop(now + duration + 0.03);
+    oscillator.onended = () => { try { oscillator.disconnect(); filter.disconnect(); gain.disconnect(); } catch {} };
+  }, [nextRandom]);
 
   const applyMelodyTranceGate = useCallback((graph: Graph, step: number) => {
     const current = melodySettingsRef.current;
@@ -1616,10 +1982,12 @@ export default function DroneEnginePage() {
     gain.gain.setValueAtTime(0.0001, now);
     gain.gain.exponentialRampToValueAtTime(0.82, now + 0.004);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.29);
-    osc.connect(gain); gain.connect(graph.technoGain); gain.connect(graph.rumbleSend);
+    osc.connect(gain); gain.connect(graph.technoGain);
     osc.start(now); osc.stop(now + 0.32);
     triggerMelodyDuck(graph);
-  }, [triggerMelodyDuck]);
+    triggerSynthDuck(graph);
+    triggerAfterimage(graph);
+  }, [triggerAfterimage, triggerMelodyDuck, triggerSynthDuck]);
 
   const playTechnoNoise = useCallback((graph: Graph, kind: 'hat' | 'snare', humanize = 0, lateMs = 0) => {
     const now = graph.context.currentTime + lateMs * 0.001 + (nextRandom() - 0.5) * humanize * 0.001;
@@ -1658,6 +2026,42 @@ export default function DroneEnginePage() {
     osc.start(now); osc.stop(now + 0.38);
   }, [nextRandom]);
 
+  // An independent, scale-locked acid voice: it lives beside the existing
+  // constrained melody rather than replacing it, and only answers active
+  // steps in the dedicated acid lane.
+  const playAcidStep = useCallback((graph: Graph, step: number, lateMs = 0) => {
+    const acid = acidSettingsRef.current;
+    if (!acid.enabled || !acid.steps[step]) return;
+    const now = graph.context.currentTime + lateMs * 0.001;
+    const scale = droneScales[settingsRef.current.scale].intervals;
+    const phrase = [0, 2, 1, 4, 3, 1, 5, 2, 0, 3, 6, 2, 4, 1, 5, 3];
+    const degree = phrase[step] % scale.length;
+    const frequency = freqForSemitone(melodySettingsRef.current.root + scale[degree] + acid.octave * 12);
+    const accent = acid.accents[step];
+    const duration = Math.min(0.34, 60 / technoSettingsRef.current.bpm * 0.72);
+    const oscillator = graph.context.createOscillator();
+    const filter = graph.context.createBiquadFilter();
+    const drive = graph.context.createWaveShaper();
+    const gain = graph.context.createGain();
+    oscillator.type = 'sawtooth';
+    oscillator.frequency.setValueAtTime(acidLastFrequencyRef.current ?? frequency, now);
+    oscillator.frequency.exponentialRampToValueAtTime(frequency, now + Math.min(0.075, duration * 0.45));
+    acidLastFrequencyRef.current = frequency;
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(190 + acid.cutoff * 68 + (accent ? 1050 : 0), now);
+    filter.frequency.exponentialRampToValueAtTime(130 + acid.cutoff * 24, now + duration);
+    filter.Q.value = 1 + acid.resonance * 0.22;
+    drive.curve = createDriveCurve(acid.drive / 100 * 0.24);
+    drive.oversample = '2x';
+    const peak = 0.09 + acid.accent / 100 * 0.09 + (accent ? 0.075 : 0);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.004);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    oscillator.connect(filter); filter.connect(drive); drive.connect(gain); gain.connect(graph.mixerChannels.acid.input);
+    oscillator.start(now); oscillator.stop(now + duration + 0.025);
+    oscillator.onended = () => { try { oscillator.disconnect(); filter.disconnect(); drive.disconnect(); gain.disconnect(); } catch {} };
+  }, []);
+
   const scheduleTechnoStep = useCallback(() => {
     const graph = graphRef.current;
     if (!graph || !technoPlayingRef.current || !runningRef.current || pausedRef.current) return;
@@ -1666,22 +2070,36 @@ export default function DroneEnginePage() {
       const bar = technoBarRef.current;
       if (bar > 0 && bar % technoSettingsRef.current.evolveBars === 0) evolveTechnoPattern();
       if (melodySettingsRef.current.enabled && bar % melodySettingsRef.current.evolveBars === 0) evolveMelodyPhrase(bar > 0);
+      const composition = melodyCompositionRef.current;
+      if (melodySettingsRef.current.composerEnabled && composition?.bars.length) {
+        const activeBar = bar % composition.bars.length;
+        melodyActiveBarRef.current = activeBar;
+        setMelodyActiveBar(activeBar);
+      }
       technoBarRef.current += 1;
     }
     const pattern = technoPatternRef.current;
+    const live = liveGridRef.current;
+    const punch = liveGridArmedRef.current;
     const humanize = technoSettingsRef.current.humanize;
     const swingOffset = step % 2 === 1 ? (60 / technoSettingsRef.current.bpm / 4) * (technoSettingsRef.current.swing / 100) * 650 : 0;
-    if (pattern.kicks.has(step)) playTechnoKick(graph);
-    if (pattern.snares.has(step)) playTechnoNoise(graph, 'snare', humanize, swingOffset);
+    if (pattern.kicks.has(step) || (punch && live.kicks[step])) playTechnoKick(graph);
+    if (pattern.snares.has(step) || (punch && live.snares[step])) playTechnoNoise(graph, 'snare', humanize, swingOffset);
     if (pattern.ghostSnares.has(step) && nextRandom() < 0.68) playTechnoNoise(graph, 'snare', humanize, swingOffset);
-    if (pattern.hats.has(step) && nextRandom() < pattern.hatChance) playTechnoNoise(graph, 'hat', humanize, swingOffset);
-    if (pattern.toms.has(step)) playTechnoTom(graph, step, humanize, swingOffset);
+    if ((pattern.hats.has(step) && nextRandom() < pattern.hatChance) || (punch && live.hats[step])) playTechnoNoise(graph, 'hat', humanize, swingOffset);
+    if (pattern.toms.has(step) || (punch && live.toms[step])) playTechnoTom(graph, step, humanize, swingOffset);
     applyMelodyTranceGate(graph, step);
-    const melodyDegree = melodyPhraseRef.current[step];
-    if (melodySettingsRef.current.enabled && melodyDegree !== null) playScaleLockedMelody(graph, melodyDegree, swingOffset);
+    if (melodySettingsRef.current.enabled && melodySettingsRef.current.composerEnabled) {
+      const composedNote = melodyCompositionRef.current?.bars[melodyActiveBarRef.current]?.steps[step] ?? null;
+      if (composedNote) playScaleLockedMelody(graph, composedNote.degree, swingOffset, composedNote);
+    } else {
+      const melodyDegree = melodyPhraseRef.current[step];
+      if (melodySettingsRef.current.enabled && melodyDegree !== null) playScaleLockedMelody(graph, melodyDegree, swingOffset);
+    }
+    playAcidStep(graph, step, swingOffset);
     technoStepRef.current += 1;
     technoTimerRef.current = window.setTimeout(() => scheduleTechnoStepRef.current(), (60 / technoSettingsRef.current.bpm / 4) * 1000);
-  }, [applyMelodyTranceGate, evolveMelodyPhrase, evolveTechnoPattern, nextRandom, playScaleLockedMelody, playTechnoKick, playTechnoNoise, playTechnoTom]);
+  }, [applyMelodyTranceGate, evolveMelodyPhrase, evolveTechnoPattern, nextRandom, playAcidStep, playScaleLockedMelody, playTechnoKick, playTechnoNoise, playTechnoTom]);
 
   useEffect(() => { scheduleTechnoStepRef.current = scheduleTechnoStep; }, [scheduleTechnoStep]);
   useEffect(() => {
@@ -1761,6 +2179,47 @@ export default function DroneEnginePage() {
     setTechnoPreset('mix');
     evolveTechnoPattern();
   }, [evolveTechnoPattern, nextRandom]);
+
+  const toggleLiveGridCell = useCallback((lane: keyof LiveGrid, step: number) => {
+    setLiveGrid((current) => ({ ...current, [lane]: current[lane].map((active, index) => index === step ? !active : active) }));
+  }, []);
+
+  const clearLiveGrid = useCallback(() => setLiveGrid(defaultLiveGrid()), []);
+
+  const setDeckLevel = useCallback((deck: 'groove' | 'melodic' | 'atmosphere', value: number) => {
+    setDeckLevels((current) => ({ ...current, [deck]: value }));
+    if (deck === 'groove') setTechnoSettings((current) => ({ ...current, volume: value }));
+    if (deck === 'melodic') setMelodySettings((current) => ({ ...current, volume: value, enabled: value > 0 }));
+    if (deck === 'atmosphere') setSettings((current) => ({ ...current, masterVolume: clamp(value / 100 * 0.75, 0.05, 0.75) }));
+  }, []);
+
+  const focusDeck = useCallback((deck: 'groove' | 'melodic' | 'atmosphere') => {
+    setDeckFocus(deck);
+    if (deck === 'groove') { setDeckLevel('groove', 78); setDeckLevel('melodic', 22); setDeckLevel('atmosphere', 48); setMacros((current) => ({ ...current, weight: 82, bloom: 24 })); }
+    if (deck === 'melodic') { setDeckLevel('groove', 48); setDeckLevel('melodic', 62); setDeckLevel('atmosphere', 58); setMacros((current) => ({ ...current, weight: 36, bloom: 62, distance: 54 })); }
+    if (deck === 'atmosphere') { setDeckLevel('groove', 34); setDeckLevel('melodic', 26); setDeckLevel('atmosphere', 68); setMacros((current) => ({ ...current, bloom: 78, weight: 28, distance: 76 })); }
+  }, [setDeckLevel]);
+
+  const updateMixerChannel = useCallback(<K extends keyof MixerChannelSetting>(channel: MixerChannelId, key: K, value: MixerChannelSetting[K]) => {
+    setMixerSettings((current) => ({ ...current, [channel]: { ...current[channel], [key]: value } }));
+  }, []);
+
+  const resetMixer = useCallback(() => setMixerSettings(defaultMixerSettings()), []);
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    const now = graph.context.currentTime;
+    mixerChannelMeta.forEach(({ id }) => {
+      const setting = mixerSettings[id];
+      const nodes = graph.mixerChannels[id];
+      const level = setting.muted ? 0.0001 : Math.max(0.0001, Math.pow(setting.volume / 100, 1.45));
+      nodes.output.gain.setTargetAtTime(level, now, 0.035);
+      nodes.low.gain.setTargetAtTime(setting.low, now, 0.045);
+      nodes.mid.gain.setTargetAtTime(setting.mid, now, 0.045);
+      nodes.high.gain.setTargetAtTime(setting.high, now, 0.045);
+    });
+  }, [mixerSettings]);
 
   useEffect(() => {
     if (!paused && technoPlayingRef.current && !technoTimerRef.current) scheduleTechnoStepRef.current();
@@ -1873,7 +2332,7 @@ export default function DroneEnginePage() {
     subOsc.connect(subGain); subGain.connect(filter); subOsc.start();
 
     filter.connect(gain); gain.connect(panner);
-    panner.connect(graph.droneDry); panner.connect(graph.droneReverbPreDelay); panner.connect(graph.droneDelay);
+    panner.connect(graph.mixerChannels.drone.input);
 
     keyVoicesRef.current.set(key, { oscillators, subOsc, gain, filter, panner });
     setActiveKeys((previous) => ({ ...previous, [key]: true }));
@@ -1942,7 +2401,7 @@ export default function DroneEnginePage() {
     subGain.gain.value = 0.36;
     subOsc.connect(subGain); subGain.connect(filter); subOsc.start();
     filter.connect(gain); gain.connect(panner);
-    panner.connect(graph.droneDry); panner.connect(graph.droneReverbPreDelay); panner.connect(graph.droneDelay);
+    panner.connect(graph.mixerChannels.drone.input);
     midiVoicesRef.current.set(voiceKey, { oscillators, subOsc, gain, filter, panner });
   }, [ensureAudio, keyboardShine, nextRandom]);
 
@@ -2224,6 +2683,13 @@ export default function DroneEnginePage() {
       };
       drawReduction('COMPRESSOR', graph?.compressor.reduction ?? 0, eqTop + 14 * ratio, '#00b894');
       drawReduction('LIMITER', graph?.limiter.reduction ?? 0, eqTop + 72 * ratio, '#e17055');
+      const now = performance.now();
+      if (now - masterMeterTickRef.current > 120) {
+        masterMeterTickRef.current = now;
+        const compressor = Number(Math.max(0, -(graph?.compressor.reduction ?? 0)).toFixed(1));
+        const limiter = Number(Math.max(0, -(graph?.limiter.reduction ?? 0)).toFixed(1));
+        setMasterMeter((current) => current.compressor === compressor && current.limiter === limiter ? current : { compressor, limiter });
+      }
       context2d.font = `${9 * ratio}px SF Mono, monospace`;
       context2d.fillStyle = '#5a5a68';
       context2d.fillText('0', meterLeft, eqBottom);
@@ -2265,6 +2731,238 @@ export default function DroneEnginePage() {
     context2d.fillStyle = '#e17055'; context2d.fillRect(markerX, 0, 2 * ratio, canvasH);
   }, [sampleLoaded, samplePosition, vocalRenderStatus]);
 
+  const updateRitualIntensity = useCallback((value: number) => {
+    const intensity = clamp(value, 0, 100);
+    setRitualIntensity(intensity);
+    setAfterimage({
+      enabled: intensity > 3,
+      memory: Math.round(clamp(18 + intensity * 0.84, 0, 100)),
+      erosion: Math.round(clamp(16 + intensity * 0.74, 0, 100)),
+      mutation: Math.round(clamp((intensity - 18) * 1.08, 0, 100)),
+    });
+    setSettings((current) => ({
+      ...current,
+      drumDriveAmount: 0.035 + intensity * 0.0013,
+      kickDuckDepth: 14 + intensity * 0.24,
+      kickBassDuckDepth: 55 + intensity * 0.38,
+      kickBassDuckRelease: 180 + intensity * 1.55,
+    }));
+    setMacros((current) => ({
+      ...current,
+      bloom: Math.round(intensity * 0.58),
+      motion: Math.round(intensity * 0.48),
+      distance: Math.round(intensity * 0.35),
+    }));
+  }, []);
+
+  const stopConductor = useCallback(() => {
+    conductorVersionRef.current += 1;
+    if (conductorTimerRef.current) window.clearTimeout(conductorTimerRef.current);
+    conductorTimerRef.current = null;
+    setConductorTarget(null);
+    setConductorProgress(0);
+  }, []);
+
+  const applyArtistScene = useCallback((id: ArtistSceneId) => {
+    const scene = artistScenes[id];
+    stopConductor();
+    setSettings((current) => ({ ...current, ...scene.settings }));
+    setTechnoSettings((current) => {
+      const next = { ...current, ...scene.techno };
+      technoSettingsRef.current = next;
+      return next;
+    });
+    setMelodySettings((current) => ({ ...current, ...scene.melody }));
+    setMacros((current) => ({ ...current, ...scene.macros }));
+    setAcidSettings((current) => ({ ...current, ...scene.acid }));
+    setRumbleDna(scene.rumble);
+    updateRitualIntensity(scene.ritual);
+    setActiveArtistScene(id);
+    setRitualStatus(`${scene.title} loaded — ${scene.artist} performance philosophy`);
+  }, [stopConductor, updateRitualIntensity]);
+
+  const conductArtistScene = useCallback((id: ArtistSceneId) => {
+    const scene = artistScenes[id];
+    stopConductor();
+    const version = conductorVersionRef.current + 1;
+    conductorVersionRef.current = version;
+    const waitForBar = technoPlayingRef.current
+      ? Math.max(0, (16 - (technoStepRef.current % 16)) * (60 / technoSettingsRef.current.bpm / 4) * 1000)
+      : 0;
+    setConductorTarget(id);
+    setConductorProgress(0);
+    setRitualStatus(`${scene.title} queued for the next bar · ${conductorBars} bars`);
+    const begin = () => {
+      if (version !== conductorVersionRef.current) return;
+      const sourceMacros = { ...macros };
+      const sourceTechno = { ...technoSettingsRef.current };
+      const sourceMelody = { ...melodySettings };
+      const sourceAcid = { ...acidSettingsRef.current };
+      const startedAt = performance.now();
+      const duration = Math.max(1, conductorBars * 4 * 60 / sourceTechno.bpm * 1000);
+      const tick = () => {
+        if (version !== conductorVersionRef.current) return;
+        const amount = clamp((performance.now() - startedAt) / duration, 0, 1);
+        setMacros({
+          bloom: lerp(sourceMacros.bloom, scene.macros.bloom ?? sourceMacros.bloom, amount),
+          weight: lerp(sourceMacros.weight, scene.macros.weight ?? sourceMacros.weight, amount),
+          motion: lerp(sourceMacros.motion, scene.macros.motion ?? sourceMacros.motion, amount),
+          distance: lerp(sourceMacros.distance, scene.macros.distance ?? sourceMacros.distance, amount),
+        });
+        setTechnoSettings((current) => {
+          const next = {
+            ...current,
+            bpm: Math.round(lerp(sourceTechno.bpm, scene.techno.bpm ?? sourceTechno.bpm, amount)),
+            hatDensity: lerp(sourceTechno.hatDensity, scene.techno.hatDensity ?? sourceTechno.hatDensity, amount),
+            tomActivity: lerp(sourceTechno.tomActivity, scene.techno.tomActivity ?? sourceTechno.tomActivity, amount),
+            volume: lerp(sourceTechno.volume, scene.techno.volume ?? sourceTechno.volume, amount),
+          };
+          technoSettingsRef.current = next;
+          return next;
+        });
+        setMelodySettings((current) => ({
+          ...current,
+          density: lerp(sourceMelody.density, scene.melody.density ?? sourceMelody.density, amount),
+          brightness: lerp(sourceMelody.brightness, scene.melody.brightness ?? sourceMelody.brightness, amount),
+          volume: lerp(sourceMelody.volume, scene.melody.volume ?? sourceMelody.volume, amount),
+        }));
+        setAcidSettings((current) => ({
+          ...current,
+          cutoff: lerp(sourceAcid.cutoff, scene.acid.cutoff ?? sourceAcid.cutoff, amount),
+          resonance: lerp(sourceAcid.resonance, scene.acid.resonance ?? sourceAcid.resonance, amount),
+          drive: lerp(sourceAcid.drive, scene.acid.drive ?? sourceAcid.drive, amount),
+          accent: lerp(sourceAcid.accent, scene.acid.accent ?? sourceAcid.accent, amount),
+        }));
+        setConductorProgress(amount);
+        if (amount < 1) { conductorTimerRef.current = window.setTimeout(tick, 70); return; }
+        setSettings((current) => ({ ...current, ...scene.settings }));
+        setTechnoSettings((current) => {
+          const next = { ...current, ...scene.techno };
+          technoSettingsRef.current = next;
+          return next;
+        });
+        setMelodySettings((current) => ({ ...current, ...scene.melody }));
+        setAcidSettings((current) => ({ ...current, ...scene.acid }));
+        setRumbleDna(scene.rumble);
+        updateRitualIntensity(scene.ritual);
+        setActiveArtistScene(id); setConductorTarget(null); setConductorProgress(0); conductorTimerRef.current = null;
+        setRitualStatus(`${scene.title} arrived`);
+      };
+      tick();
+    };
+    conductorTimerRef.current = window.setTimeout(begin, waitForBar);
+  }, [conductorBars, macros, melodySettings, stopConductor, updateRitualIntensity]);
+
+  const updatePerformanceMacro = useCallback((name: keyof PerformanceMacros, value: number) => {
+    setMacros((current) => {
+      const next = { ...current, [name]: value };
+      if (gestureRecording) {
+        const frame = { at: performance.now() - gestureRecordStartRef.current, macros: next };
+        gestureFramesRef.current.push(frame);
+        setGestureFrames([...gestureFramesRef.current]);
+      }
+      return next;
+    });
+  }, [gestureRecording]);
+
+  const stopGesturePlayback = useCallback(() => {
+    if (gesturePlaybackTimerRef.current) window.clearTimeout(gesturePlaybackTimerRef.current);
+    gesturePlaybackTimerRef.current = null;
+    setGesturePlaying(false);
+  }, []);
+
+  const toggleGestureRecording = useCallback(() => {
+    if (gestureRecording) { setGestureRecording(false); setRitualStatus(`${gestureFramesRef.current.length} gesture frames captured`); return; }
+    stopGesturePlayback();
+    gestureFramesRef.current = [];
+    setGestureFrames([]);
+    gestureRecordStartRef.current = performance.now();
+    setGestureRecording(true);
+    setRitualStatus('Gesture recording — move the performance macros');
+  }, [gestureRecording, stopGesturePlayback]);
+
+  const playGesture = useCallback(() => {
+    const frames = gestureFramesRef.current;
+    if (!frames.length) { setRitualStatus('Record a macro gesture first'); return; }
+    stopGesturePlayback();
+    setGesturePlaying(true);
+    let index = 0;
+    const play = () => {
+      const frame = frames[index];
+      if (!frame) { stopGesturePlayback(); return; }
+      setMacros(frame.macros);
+      index += 1;
+      const delay = Math.max(16, (frames[index]?.at ?? frame.at) - frame.at);
+      gesturePlaybackTimerRef.current = window.setTimeout(play, delay);
+    };
+    play();
+  }, [stopGesturePlayback]);
+
+  useEffect(() => () => {
+    if (conductorTimerRef.current) window.clearTimeout(conductorTimerRef.current);
+    if (gesturePlaybackTimerRef.current) window.clearTimeout(gesturePlaybackTimerRef.current);
+  }, []);
+
+  const mutateRitual = useCallback(() => {
+    evolveTechnoPattern();
+    evolveMelodyPhrase(true);
+    setAfterimage((current) => ({ ...current, mutation: Math.round(clamp(current.mutation + (nextRandom() - 0.35) * 28, 0, 100)) }));
+    setHarmonicGravity((current) => clamp(current + (nextRandom() - 0.5) * 18, 0, 100));
+    setRitualStatus(`World mutated · ${rumbleDnaRef.current.toUpperCase()} DNA`);
+  }, [evolveMelodyPhrase, evolveTechnoPattern, nextRandom]);
+
+  const triggerRitualTectonic = useCallback(() => {
+    const preferred = ritualNextSceneRef.current;
+    const fallback = preferred === 'a' ? 'b' : 'a';
+    const target = scenes[preferred] ? preferred : scenes[fallback] ? fallback : null;
+    if (!target) {
+      captureScene('a');
+      ritualNextSceneRef.current = 'b';
+      setRitualStatus('Tectonic anchor A stored — reshape the world, then store B');
+      return;
+    }
+    morphToScene(target);
+    ritualNextSceneRef.current = target === 'a' ? 'b' : 'a';
+    setBlackoutMode(true);
+    setRitualStatus(`Tectonic shift toward ${target.toUpperCase()}`);
+  }, [captureScene, morphToScene, scenes]);
+
+  const beginRitualGesture = useCallback(() => {
+    ritualLongPressRef.current = false;
+    if (ritualPressTimerRef.current) window.clearTimeout(ritualPressTimerRef.current);
+    ritualPressTimerRef.current = window.setTimeout(() => {
+      ritualLongPressRef.current = true;
+      setBlackoutMode(true);
+      void captureRitual();
+    }, 620);
+  }, [captureRitual]);
+
+  const endRitualGesture = useCallback(() => {
+    if (ritualPressTimerRef.current) window.clearTimeout(ritualPressTimerRef.current);
+    ritualPressTimerRef.current = null;
+    if (ritualLongPressRef.current) return;
+    if (ritualTapTimerRef.current) {
+      window.clearTimeout(ritualTapTimerRef.current);
+      ritualTapTimerRef.current = null;
+      triggerRitualTectonic();
+      return;
+    }
+    ritualTapTimerRef.current = window.setTimeout(() => {
+      ritualTapTimerRef.current = null;
+      mutateRitual();
+    }, 260);
+  }, [mutateRitual, triggerRitualTectonic]);
+
+  const cancelRitualGesture = useCallback(() => {
+    if (ritualPressTimerRef.current) window.clearTimeout(ritualPressTimerRef.current);
+    ritualPressTimerRef.current = null;
+  }, []);
+
+  useEffect(() => () => {
+    if (ritualPressTimerRef.current) window.clearTimeout(ritualPressTimerRef.current);
+    if (ritualTapTimerRef.current) window.clearTimeout(ritualTapTimerRef.current);
+  }, []);
+
   const onDropZoneDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.stopPropagation();
@@ -2274,14 +2972,80 @@ export default function DroneEnginePage() {
   }, [handleSampleFile]);
 
   const status = paused ? 'Paused' : running ? 'Generating' : 'Standby';
+  const gentleMasterGlue = settings.masterSaturation === 0.025 && settings.compThreshold === -12 && settings.compRatio === 2 && settings.compAttack === 0.03 && settings.compRelease === 0.25 && settings.limiterCeiling === -1;
+  const performanceSources = [
+    { label: 'Drone', color: 'drone', active: running && voiceCount > 0 },
+    { label: 'Machine', color: 'machine', active: technoPlaying },
+    { label: 'Melody', color: 'melody', active: melodySettings.enabled && technoPlaying },
+    { label: 'Acid', color: 'acid', active: acidSettings.enabled },
+    { label: 'Input', color: 'input', active: sampleActive || micState === 'recording' },
+    { label: 'Pulse', color: 'pulse', active: running && pulsePattern !== 'off' },
+    { label: 'Ritual', color: 'ritual', active: ritualIntensity > 0 },
+  ];
+  const mixerActivity: Record<MixerChannelId, boolean> = {
+    drone: running && voiceCount > 0,
+    machine: technoPlaying,
+    melody: melodySettings.enabled && technoPlaying,
+    acid: acidSettings.enabled,
+    input: sampleActive || micState === 'recording',
+    pulse: running && pulsePattern !== 'off',
+    ritual: ritualIntensity > 0,
+    master: started && running,
+  };
 
   return (
-    <div className="container">
+    <div className={`container${blackoutMode ? ' blackout' : ''}`}>
       <header>
+        <div className="header-actions">
+          <button type="button" className="info-btn" aria-label="How to use Hi Drone" onClick={() => setShowGuide(true)}>i</button>
+          <button type="button" className={`blackout-btn${blackoutMode ? ' active' : ''}`} onClick={() => setBlackoutMode((current) => !current)}>{blackoutMode ? 'Exit Blackout' : 'Blackout'}</button>
+        </div>
         <img src="/logo.png" alt="" className="logo" />
         <h1>Hi Drone</h1>
         <p>SELF-GENERATING AMBIENT SOUNDSCAPES</p>
       </header>
+
+      {showGuide && <div className="guide-backdrop" role="presentation" onClick={() => setShowGuide(false)}>
+        <section className="guide-modal" role="dialog" aria-modal="true" aria-label="How to use Hi Drone" onClick={(event) => event.stopPropagation()}>
+          <button type="button" className="guide-close" aria-label="Close guide" onClick={() => setShowGuide(false)}>×</button>
+          <h2>How to use Hi Drone</h2>
+          <p>Press <strong>Begin</strong>, start Minimal Machine, then let the drone and kick find space around each other.</p>
+          <ol>
+            <li>Raise <strong>Ritual</strong> to blend ghost tails, drum drive, granular space, bass ducking, and mutation as one gesture.</li>
+            <li>Choose a DNA material: Cavern, Metal, Dust, or Sub.</li>
+            <li>Tap the Core to mutate, hold it to absorb the last 12 seconds, or double-tap it for a Tectonic Scene shift.</li>
+            <li>Store anchors A and B inside Ritual Core to give Tectonic shifts two worlds to travel between.</li>
+            <li>Blackout activates automatically for capture and scene shifts; exit it from the header.</li>
+          </ol>
+        </section>
+      </div>}
+
+      {started ? (
+        <aside className={`floating-mixer${mixBoardOpen ? ' open' : ' folded'}`} aria-label="Floating mix board">
+          {mixBoardOpen ? (
+            <>
+              <div className="mixer-head">
+                <div><strong>Mix Board</strong><span>Independent source level and three-band EQ</span></div>
+                <div className="btn-row"><button type="button" className="mixer-reset" onClick={resetMixer}>Reset</button><button type="button" className="mixer-fold" aria-label="Fold mix board" onClick={() => setMixBoardOpen(false)}>⌄</button></div>
+              </div>
+              <div className="mixer-channels">
+                {mixerChannelMeta.map((channel) => {
+                  const mix = mixerSettings[channel.id];
+                  return (
+                    <section className={`mixer-strip${mix.muted ? ' muted' : ''}${channel.id === 'master' ? ' master' : ''}${mixerActivity[channel.id] ? ' active' : ''}`} key={channel.id}>
+                      <div className="mixer-strip-head"><i style={{ background: channel.color }} /><strong>{channel.label}</strong><button type="button" className={`mixer-mute${mix.muted ? ' active' : ''}`} aria-label={`${mix.muted ? 'Unmute' : 'Mute'} ${channel.label}`} onClick={() => updateMixerChannel(channel.id, 'muted', !mix.muted)}>M</button></div>
+                      <label className="mixer-volume"><span>VOL</span><strong>{Math.round(mix.volume)}</strong><input aria-label={`${channel.label} volume`} type="range" min="0" max="100" step="1" value={mix.volume} onChange={(event) => updateMixerChannel(channel.id, 'volume', Number(event.target.value))} /></label>
+                      <div className="mixer-eq">
+                        {(['low', 'mid', 'high'] as const).map((band) => <label key={band}><span>{band}</span><input aria-label={`${channel.label} ${band} EQ`} type="range" min="-12" max="12" step="0.5" value={mix[band]} onChange={(event) => updateMixerChannel(channel.id, band, Number(event.target.value))} /><strong>{mix[band] > 0 ? '+' : ''}{mix[band]}</strong></label>)}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
+            </>
+          ) : <button type="button" className="mixer-unfold" aria-expanded="false" onClick={() => setMixBoardOpen(true)}><span>≋</span> MIX</button>}
+        </aside>
+      ) : null}
 
       {!started && (
         <div className="start-screen">
@@ -2523,13 +3287,16 @@ export default function DroneEnginePage() {
               </div>
             </div>
 
-            <div className="panel panel-full">
-              <h3>Mastering</h3>
+            <div className="panel panel-full mastering-panel">
+              <div className="performance-heading">
+                <div><h3>Mastering</h3><span>Final tone, shared movement, and safe output.</span></div>
+                <div className="master-glue-preset"><span>{gentleMasterGlue ? 'Gentle profile' : 'Custom profile'}</span><button type="button" className="btn active" onClick={applyMasterGlue}>Apply Master Glue</button></div>
+              </div>
               <div className="mastering-visualizer">
                 <canvas ref={masteringCanvasRef} aria-label="Live EQ curve, compressor reduction, and limiter reduction" />
               </div>
               <div className="mastering-grid">
-                <div>
+                <div className="master-module tone-module">
                   <div className="slider-label" style={{ marginBottom: 8 }}><span>EQ — 3-band, on the master bus</span></div>
                   <div className="slider-group">
                     <div className="slider-label"><span>Bass (200 Hz)</span><span>{settings.eqLowGain > 0 ? '+' : ''}{settings.eqLowGain.toFixed(0)} dB</span></div>
@@ -2544,27 +3311,107 @@ export default function DroneEnginePage() {
                     <input type="range" min="-12" max="12" step="1" value={settings.eqHighGain} onChange={(event) => updateSetting('eqHighGain', Number(event.target.value))} />
                   </div>
                 </div>
-                <div>
-                  <div className="slider-label" style={{ marginBottom: 8 }}><span>Compressor — glues the mix together</span></div>
+                <div className="master-module glue-module">
+                  <div className="slider-label" style={{ marginBottom: 8 }}><span>Master Glue — colour + breathing compression</span></div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Soft saturation</span><span>{Math.round(settings.masterSaturation * 100)}%</span></div>
+                    <input className="safe-range safe-saturation" aria-label="Master soft saturation" type="range" min="0" max="10" step="0.5" value={settings.masterSaturation * 100} onChange={(event) => updateSetting('masterSaturation', Number(event.target.value) / 100)} />
+                  </div>
                   <div className="slider-group">
                     <div className="slider-label"><span>Threshold</span><span>{settings.compThreshold.toFixed(0)} dB</span></div>
-                    <input type="range" min="-40" max="0" step="1" value={settings.compThreshold} onChange={(event) => updateSetting('compThreshold', Number(event.target.value))} />
+                    <input className="safe-range safe-threshold" type="range" min="-40" max="0" step="1" value={settings.compThreshold} onChange={(event) => updateSetting('compThreshold', Number(event.target.value))} />
                   </div>
                   <div className="slider-group">
                     <div className="slider-label"><span>Ratio</span><span>{settings.compRatio.toFixed(0)}:1</span></div>
-                    <input type="range" min="1" max="20" step="1" value={settings.compRatio} onChange={(event) => updateSetting('compRatio', Number(event.target.value))} />
+                    <input className="safe-range safe-ratio" type="range" min="1" max="20" step="1" value={settings.compRatio} onChange={(event) => updateSetting('compRatio', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Attack</span><span>{Math.round(settings.compAttack * 1000)} ms</span></div>
+                    <input className="safe-range safe-attack" aria-label="Master compressor attack" type="range" min="1" max="100" step="1" value={settings.compAttack * 1000} onChange={(event) => updateSetting('compAttack', Number(event.target.value) / 1000)} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Release</span><span>{Math.round(settings.compRelease * 1000)} ms</span></div>
+                    <input className="safe-range safe-release" aria-label="Master compressor release" type="range" min="50" max="600" step="10" value={settings.compRelease * 1000} onChange={(event) => updateSetting('compRelease', Number(event.target.value) / 1000)} />
                   </div>
                 </div>
-                <div>
+                <div className="master-module limiter-module">
                   <div className="slider-label" style={{ marginBottom: 8 }}><span>Limiter — final safety ceiling</span></div>
                   <div className="slider-group">
                     <div className="slider-label"><span>Ceiling</span><span>{settings.limiterCeiling.toFixed(1)} dB</span></div>
-                    <input type="range" min="-6" max="-0.1" step="0.1" value={settings.limiterCeiling} onChange={(event) => updateSetting('limiterCeiling', Number(event.target.value))} />
+                    <input className="safe-range safe-limiter" type="range" min="-6" max="-0.1" step="0.1" value={settings.limiterCeiling} onChange={(event) => updateSetting('limiterCeiling', Number(event.target.value))} />
+                  </div>
+                </div>
+                <div>
+                  <div className="slider-label" style={{ marginBottom: 8 }}><span>Synth bus — compressor &amp; limiter</span></div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Compressor threshold</span><span>{settings.synthCompThreshold.toFixed(0)} dB</span></div>
+                    <input aria-label="Synth compressor threshold" type="range" min="-40" max="0" step="1" value={settings.synthCompThreshold} onChange={(event) => updateSetting('synthCompThreshold', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Compressor ratio</span><span>{settings.synthCompRatio.toFixed(0)}:1</span></div>
+                    <input aria-label="Synth compressor ratio" type="range" min="1" max="20" step="1" value={settings.synthCompRatio} onChange={(event) => updateSetting('synthCompRatio', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Limiter ceiling</span><span>{settings.synthLimiterCeiling.toFixed(1)} dB</span></div>
+                    <input aria-label="Synth limiter ceiling" type="range" min="-8" max="-0.1" step="0.1" value={settings.synthLimiterCeiling} onChange={(event) => updateSetting('synthLimiterCeiling', Number(event.target.value))} />
+                  </div>
+                </div>
+                <div>
+                  <div className="slider-label" style={{ marginBottom: 8 }}><span>Drum bus — drive, compressor &amp; limiter</span></div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Drum drive</span><span>{Math.round(settings.drumDriveAmount * 100)}%</span></div>
+                    <input aria-label="Drum distortion amount" type="range" min="0" max="30" step="1" value={settings.drumDriveAmount * 100} onChange={(event) => updateSetting('drumDriveAmount', Number(event.target.value) / 100)} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Compressor threshold</span><span>{settings.drumCompThreshold.toFixed(0)} dB</span></div>
+                    <input aria-label="Drum compressor threshold" type="range" min="-40" max="0" step="1" value={settings.drumCompThreshold} onChange={(event) => updateSetting('drumCompThreshold', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Compressor ratio</span><span>{settings.drumCompRatio.toFixed(0)}:1</span></div>
+                    <input aria-label="Drum compressor ratio" type="range" min="1" max="20" step="1" value={settings.drumCompRatio} onChange={(event) => updateSetting('drumCompRatio', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Limiter ceiling</span><span>{settings.drumLimiterCeiling.toFixed(1)} dB</span></div>
+                    <input aria-label="Drum limiter ceiling" type="range" min="-8" max="-0.1" step="0.1" value={settings.drumLimiterCeiling} onChange={(event) => updateSetting('drumLimiterCeiling', Number(event.target.value))} />
+                  </div>
+                </div>
+                <div>
+                  <div className="slider-label" style={{ marginBottom: 8 }}><span>Kick Space — protects the kick from synth rumble</span></div>
+                  <div className="btn-row" style={{ marginBottom: 12 }}>
+                    <button type="button" className={`btn${settings.kickSpace ? ' active' : ''}`} onClick={() => updateSetting('kickSpace', !settings.kickSpace)}>{settings.kickSpace ? 'Auto Duck On' : 'Auto Duck Off'}</button>
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Full synth duck</span><span>{settings.kickDuckDepth}%</span></div>
+                    <input aria-label="Kick-triggered synth duck depth" type="range" min="0" max="100" step="1" disabled={!settings.kickSpace} value={settings.kickDuckDepth} onChange={(event) => updateSetting('kickDuckDepth', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Duck release</span><span>{settings.kickDuckRelease} ms</span></div>
+                    <input aria-label="Kick-triggered synth duck release" type="range" min="80" max="600" step="10" disabled={!settings.kickSpace} value={settings.kickDuckRelease} onChange={(event) => updateSetting('kickDuckRelease', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Bass duck ({settings.kickBassSplit} Hz↓)</span><span>{settings.kickBassDuckDepth}%</span></div>
+                    <input aria-label="Kick-triggered synth bass duck depth" type="range" min="0" max="100" step="1" disabled={!settings.kickSpace} value={settings.kickBassDuckDepth} onChange={(event) => updateSetting('kickBassDuckDepth', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Bass duck release</span><span>{settings.kickBassDuckRelease} ms</span></div>
+                    <input aria-label="Kick-triggered synth bass duck release" type="range" min="80" max="600" step="10" disabled={!settings.kickSpace} value={settings.kickBassDuckRelease} onChange={(event) => updateSetting('kickBassDuckRelease', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Bass duck split</span><span>{settings.kickBassSplit} Hz</span></div>
+                    <input aria-label="Kick-triggered synth bass duck split frequency" type="range" min="100" max="300" step="5" disabled={!settings.kickSpace} value={settings.kickBassSplit} onChange={(event) => updateSetting('kickBassSplit', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Sub cleanup</span><span>{settings.synthLowCut} Hz</span></div>
+                    <input aria-label="Synth low-cut frequency" type="range" min="20" max="90" step="1" value={settings.synthLowCut} onChange={(event) => updateSetting('synthLowCut', Number(event.target.value))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Synth high-cut</span><span>{(settings.synthHighCut / 1000).toFixed(1)} kHz</span></div>
+                    <input aria-label="Synth high-cut frequency" type="range" min="4000" max="16000" step="100" value={settings.synthHighCut} onChange={(event) => updateSetting('synthHighCut', Number(event.target.value))} />
                   </div>
                 </div>
               </div>
               <div className="sample-help">
-                All three stages sit on the master bus, after everything else sums together, and update live — mix while recording and every change lands in the export.
+                Master Glue applies subtle saturation, a 2:1 compressor with a 30 ms attack, and a 250 ms release—the kick stays punchy while the mix breathes as one. Aim for around 1–2 dB of compressor reduction; the limiter should only catch occasional peaks. Every change lands in the export.
               </div>
             </div>
 
@@ -2590,43 +3437,144 @@ export default function DroneEnginePage() {
               <div className="sample-help">Click a cable to patch or unpatch it. Active cables are real: pitch shapes LFO pace, modulation depth opens the delay, and Space → Tone gently darkens the source as the room grows.</div>
             </div>
 
+            <div className="panel panel-full afterimage-panel">
+              <div className="performance-heading">
+                <div><h3>Ritual Core</h3><span>One gesture conducts afterimage, memory, mutation, drive, ducking, and scenes.</span></div>
+                <span className="ritual-readout">{ritualIntensity}</span>
+              </div>
+              <label className="ritual-intensity">
+                <span>Clean world</span>
+                <input aria-label="Ritual intensity" type="range" min="0" max="100" step="1" value={ritualIntensity} onChange={(event) => updateRitualIntensity(Number(event.target.value))} />
+                <span>Full ritual</span>
+              </label>
+              <div className="scale-row" style={{ marginBottom: 16 }}>
+                {([{ value: 'cavern', label: 'Cavern' }, { value: 'metal', label: 'Metal' }, { value: 'dust', label: 'Dust' }, { value: 'sub', label: 'Sub' }] as const).map((dna) => (
+                  <button key={dna.value} type="button" className={`scale-btn${rumbleDna === dna.value ? ' active' : ''}`} onClick={() => setRumbleDna(dna.value)}>{dna.label}</button>
+                ))}
+              </div>
+              <div className="ritual-core-stage">
+                <button
+                  type="button"
+                  className="ritual-core-button"
+                  onPointerDown={beginRitualGesture}
+                  onPointerUp={endRitualGesture}
+                  onPointerCancel={cancelRitualGesture}
+                  onPointerLeave={cancelRitualGesture}
+                >
+                  <strong>CORE</strong><span>tap · hold · double</span>
+                </button>
+                <div className="ritual-core-state">
+                  <strong>{rumbleDna.toUpperCase()} DNA</strong>
+                  <span>Memory {afterimage.memory} · Erosion {afterimage.erosion} · Mutation {afterimage.mutation}</span>
+                  <small>{ritualStatus}</small>
+                </div>
+              </div>
+              <div className="scene-strip ritual-anchors">
+                {(['a', 'b'] as const).map((slot) => (
+                  <div className={`scene-slot${scenes[slot] ? ' stored' : ''}`} key={slot}>
+                    <span>Anchor {slot.toUpperCase()}</span>
+                    <button type="button" className="btn" onClick={() => captureScene(slot)}>{scenes[slot] ? 'Overwrite' : 'Store'}</button>
+                    {scenes[slot] && <button type="button" className="btn" disabled={morphTarget !== null} onClick={() => applyScene(scenes[slot]!)}>Recall</button>}
+                  </div>
+                ))}
+                <label className="morph-time"><span>Tectonic time</span><strong>{morphSeconds}s</strong><input aria-label="Tectonic morph time" type="range" min="10" max="120" step="5" value={morphSeconds} onChange={(event) => setMorphSeconds(Number(event.target.value))} /></label>
+                {morphTarget && <button type="button" className="btn btn-warm" onClick={stopMorph}>Cancel shift · {Math.round(morphProgress * 100)}%</button>}
+              </div>
+              <div className="sample-help">Ritual intensity controls the relationships underneath. Tap CORE to mutate, hold to absorb the recent mix, or double-tap for the next Tectonic anchor.</div>
+            </div>
+
             <div className="panel panel-full performance-panel">
               <div className="performance-heading">
-                <div><h3>Performance</h3><span>Guide the world without rewriting the patch.</span></div>
+                <div><h3>Tectonic Performance</h3><span>Guide the world without rewriting the patch.</span></div>
                 <button type="button" className={`btn freeze-btn${freezeActive ? ' active' : ''}`} disabled={!freezeActive && voiceCount === 0} onClick={() => { if (freezeActive) releaseFreeze(); else void captureFreeze(); }}>
                   {freezeActive ? 'Release Freeze' : 'Capture Freeze'}
                 </button>
               </div>
+              <div className="live-signal" aria-label="Live signal path">
+                <div className="signal-stage signal-sources">
+                  <span className="signal-kicker">Sources</span>
+                  <div className="source-lights">
+                    {performanceSources.map((source) => <span className={`source-light ${source.color}${source.active ? ' active' : ''}`} key={source.label}><i />{source.label}</span>)}
+                  </div>
+                </div>
+                <span className="signal-arrow" aria-hidden="true">→</span>
+                <div className="signal-stage signal-performance">
+                  <span className="signal-kicker">Performance</span>
+                  <strong>{freezeActive ? 'Frozen world' : gesturePlaying ? 'Gesture playing' : 'Macros live'}</strong>
+                </div>
+                <span className="signal-arrow" aria-hidden="true">→</span>
+                <div className="signal-stage signal-glue active">
+                  <span className="signal-kicker">Master Glue</span>
+                  <strong>{gentleMasterGlue ? 'Gentle' : 'Custom'}</strong>
+                  <small><b>{masterMeter.compressor.toFixed(1)}</b> dB comp · <b>{masterMeter.limiter.toFixed(1)}</b> dB limit</small>
+                </div>
+                <span className="signal-arrow" aria-hidden="true">→</span>
+                <div className="signal-stage signal-output">
+                  <span className="signal-kicker">Output</span>
+                  <strong>{isRecording ? 'Recording' : status}</strong>
+                </div>
+              </div>
               <div className="macro-grid">
                 {(Object.entries(macros) as Array<[keyof PerformanceMacros, number]>).map(([name, value]) => (
-                  <label className="macro-control" key={name}>
+                  <label className={`macro-control${value >= 70 ? ' hot' : ''}`} style={{ '--macro-level': `${value * 3.6}deg` } as CSSProperties} key={name}>
                     <span>{name}</span>
-                    <strong>{Math.round(value)}</strong>
-                    <input aria-label={`${name} macro`} type="range" min="0" max="100" step="1" value={value} onChange={(event) => setMacros((current) => ({ ...current, [name]: Number(event.target.value) }))} />
+                    <div className="macro-dial" aria-hidden="true"><strong>{Math.round(value)}</strong><small>%</small></div>
+                    <input aria-label={`${name} macro`} type="range" min="0" max="100" step="1" value={value} onChange={(event) => updatePerformanceMacro(name, Number(event.target.value))} />
                   </label>
                 ))}
-                <label className="macro-control gravity-control">
+                <label className={`macro-control gravity-control${harmonicGravity >= 70 ? ' hot' : ''}`} style={{ '--macro-level': `${harmonicGravity * 3.6}deg` } as CSSProperties}>
                   <span>Harmonic gravity</span>
-                  <strong>{Math.round(harmonicGravity)}</strong>
+                  <div className="macro-dial" aria-hidden="true"><strong>{Math.round(harmonicGravity)}</strong><small>%</small></div>
                   <input aria-label="Harmonic gravity" type="range" min="0" max="100" step="1" value={harmonicGravity} onChange={(event) => setHarmonicGravity(Number(event.target.value))} />
                   <small>{midiMode !== 'root' || midiRootNote === null ? 'Hold a MIDI root to engage' : `Following ${nameForSemitone(midiRootNote)}`}</small>
                 </label>
               </div>
-              <div className="scene-strip">
-                {(['a', 'b'] as const).map((slot) => (
-                  <div className={`scene-slot${scenes[slot] ? ' stored' : ''}`} key={slot}>
-                    <span>Scene {slot.toUpperCase()}</span>
-                    <button type="button" className="btn" onClick={() => captureScene(slot)}>{scenes[slot] ? 'Overwrite' : 'Store'}</button>
-                    {scenes[slot] && <>
-                      <button type="button" className="btn" disabled={morphTarget !== null} onClick={() => applyScene(scenes[slot]!)}>Recall</button>
-                      <button type="button" className="btn" disabled={morphTarget !== null} onClick={() => morphToScene(slot)}>Morph to {slot.toUpperCase()}</button>
-                    </>}
-                  </div>
-                ))}
-                <label className="morph-time"><span>Morph time</span><strong>{morphSeconds}s</strong><input aria-label="Scene morph time" type="range" min="10" max="120" step="5" value={morphSeconds} onChange={(event) => setMorphSeconds(Number(event.target.value))} /></label>
-                {morphTarget && <button type="button" className="btn btn-warm" onClick={stopMorph}>Cancel morph · {Math.round(morphProgress * 100)}%</button>}
+              <div className="sample-help">These macros remain available for detailed live steering. Ritual Core conducts them automatically when its main intensity changes.</div>
+            </div>
+
+            <div className="panel panel-full artist-panel">
+              <div className="performance-heading">
+                <div><h3>Performance Palette</h3><span>Five artist-inspired ways of conducting the instrument. Load is immediate; conduct arrives on the next bar.</span></div>
+                <label className="conductor-length"><span>Conductor</span><select aria-label="Conductor length" value={conductorBars} onChange={(event) => setConductorBars(Number(event.target.value))}><option value={8}>8 bars</option><option value={16}>16 bars</option><option value={32}>32 bars</option></select></label>
               </div>
-              <div className="sample-help">Bloom, Weight, Motion, and Distance are live overlays. Freeze preserves the active harmony while new voices continue forming around it. Scenes capture sound settings only—never audio files, recording, or MIDI connections.</div>
+              <div className="artist-scene-grid">
+                {Object.values(artistScenes).map((scene) => (
+                  <article className={`artist-scene${activeArtistScene === scene.id ? ' active' : ''}${conductorTarget === scene.id ? ' conducting' : ''}`} key={scene.id}>
+                    <span className="artist-name">{scene.artist}</span>
+                    <strong>{scene.title}</strong>
+                    <p>{scene.description}</p>
+                    <div className="artist-actions"><button type="button" className="btn" onClick={() => applyArtistScene(scene.id)}>Load</button><button type="button" className="btn btn-warm" onClick={() => conductArtistScene(scene.id)}>Conduct</button></div>
+                  </article>
+                ))}
+              </div>
+              {conductorTarget && <div className="conductor-status"><span>{artistScenes[conductorTarget].title} {conductorProgress ? `· ${Math.round(conductorProgress * 100)}%` : '· queued'}</span><button type="button" className="btn" onClick={stopConductor}>Cancel conductor</button></div>}
+            </div>
+
+            <div className="panel panel-full performance-panel">
+              <div className="performance-heading"><div><h3>Three-Deck Performance</h3><span>Ride the groove, melodic, and atmospheric buses like a long-form mix.</span></div><div className="btn-row">{(['groove', 'melodic', 'atmosphere'] as const).map((deck) => <button key={deck} type="button" className={`btn${deckFocus === deck ? ' active' : ''}`} onClick={() => focusDeck(deck)}>{deck}</button>)}</div></div>
+              <div className="deck-grid">
+                {([{ id: 'groove', label: 'Deck A · Groove' }, { id: 'melodic', label: 'Deck B · Melody' }, { id: 'atmosphere', label: 'Deck C · Atmosphere' }] as const).map((deck) => (
+                  <label className="deck-strip" key={deck.id}><span>{deck.label}</span><strong>{deckLevels[deck.id]}</strong><input aria-label={`${deck.label} level`} type="range" min="0" max="100" value={deckLevels[deck.id]} onChange={(event) => setDeckLevel(deck.id, Number(event.target.value))} /></label>
+                ))}
+              </div>
+            </div>
+
+            <div className="panel panel-full acid-panel">
+              <div className="performance-heading"><div><h3>Acid Pressure Lane</h3><span>Scale-locked resonance voice. It adds a lane; it never takes the existing melody away.</span></div><button type="button" className={`btn freeze-btn${acidSettings.enabled ? ' active' : ''}`} onClick={() => setAcidSettings((current) => ({ ...current, enabled: !current.enabled }))}>{acidSettings.enabled ? 'Acid On' : 'Acid Off'}</button></div>
+              <div className="step-lane"><span>Notes</span><div>{acidSettings.steps.map((active, step) => <button type="button" aria-label={`Acid note step ${step + 1}`} className={`step-button${active ? ' active' : ''}`} key={step} onClick={() => setAcidSettings((current) => ({ ...current, steps: current.steps.map((value, index) => index === step ? !value : value) }))}>{step + 1}</button>)}</div></div>
+              <div className="step-lane accent-lane"><span>Accent</span><div>{acidSettings.accents.map((active, step) => <button type="button" aria-label={`Acid accent step ${step + 1}`} className={`step-button${active ? ' accent' : ''}`} key={step} onClick={() => setAcidSettings((current) => ({ ...current, accents: current.accents.map((value, index) => index === step ? !value : value) }))}>{active ? '▲' : '·'}</button>)}</div></div>
+              <div className="acid-controls">
+                {([{ key: 'cutoff', label: 'Cutoff' }, { key: 'resonance', label: 'Resonance' }, { key: 'drive', label: 'Drive' }, { key: 'accent', label: 'Accent' }] as const).map((control) => <label className="slider-group" key={control.key}><div className="slider-label"><span>{control.label}</span><span>{Math.round(acidSettings[control.key])}%</span></div><input aria-label={`Acid ${control.label}`} type="range" min="0" max="100" value={acidSettings[control.key]} onChange={(event) => setAcidSettings((current) => ({ ...current, [control.key]: Number(event.target.value) }))} /></label>)}
+                <label className="slider-group"><div className="slider-label"><span>Octave</span><span>+{acidSettings.octave}</span></div><input aria-label="Acid octave" type="range" min="0" max="2" step="1" value={acidSettings.octave} onChange={(event) => setAcidSettings((current) => ({ ...current, octave: Number(event.target.value) }))} /></label>
+              </div>
+            </div>
+
+            <div className="panel panel-full wizard-panel">
+              <div className="performance-heading"><div><h3>Wizard Grid &amp; Gesture Recorder</h3><span>Punch extra machine hits into the running pattern, then capture macro movement as an arrangement.</span></div><div className="btn-row"><button type="button" className={`btn${liveGridArmed ? ' active' : ''}`} onClick={() => setLiveGridArmed((current) => !current)}>{liveGridArmed ? 'Grid Armed' : 'Arm Grid'}</button><button type="button" className="btn" onClick={clearLiveGrid}>Clear grid</button></div></div>
+              <div className="live-grid">
+                {(Object.entries(liveGrid) as Array<[keyof LiveGrid, boolean[]]>).map(([lane, steps]) => <div className="live-grid-row" key={lane}><span>{lane}</span>{steps.map((active, step) => <button type="button" aria-label={`${lane} step ${step + 1}`} className={`grid-cell${active ? ' active' : ''}`} key={step} onClick={() => toggleLiveGridCell(lane, step)}>{step % 4 === 0 ? step + 1 : ''}</button>)}</div>)}
+              </div>
+              <div className="gesture-row"><div><strong>Gesture recorder</strong><span>{gestureRecording ? 'Recording macro moves' : gesturePlaying ? 'Playing captured gesture' : `${gestureFrames.length} frames in memory`}</span></div><div className="btn-row"><button type="button" className={`btn${gestureRecording ? ' active' : ''}`} onClick={toggleGestureRecording}>{gestureRecording ? 'Stop recording' : 'Record gesture'}</button><button type="button" className={`btn${gesturePlaying ? ' active' : ''}`} disabled={!gestureFrames.length} onClick={gesturePlaying ? stopGesturePlayback : playGesture}>{gesturePlaying ? 'Stop gesture' : 'Play gesture'}</button></div></div>
             </div>
 
             <div className="panel panel-full">
@@ -2765,9 +3713,12 @@ export default function DroneEnginePage() {
               <div className="performance-heading">
                 <div>
                   <h3>Constrained Melody</h3>
-                  <span>Scale-locked random walk · preserves a motif while changing its voice-leading</span>
+                  <span>{melodySettings.composerEnabled ? `${melodySettings.phraseBars}-bar ${melodySettings.mode} composer · motif, answer, variation, resolution` : 'Scale-locked random walk · preserves a motif while changing its voice-leading'}</span>
                 </div>
-                <button type="button" className={`btn freeze-btn${melodySettings.enabled ? ' active' : ''}`} onClick={() => setMelodySettings((current) => ({ ...current, enabled: !current.enabled }))}>{melodySettings.enabled ? 'Melody On' : 'Melody Off'}</button>
+                <div className="btn-row">
+                  <button type="button" className={`btn${melodySettings.composerEnabled ? ' active' : ''}`} onClick={toggleMelodyComposer}>{melodySettings.composerEnabled ? 'Composer On' : 'Composer Off'}</button>
+                  <button type="button" className={`btn freeze-btn${melodySettings.enabled ? ' active' : ''}`} onClick={() => setMelodySettings((current) => ({ ...current, enabled: !current.enabled }))}>{melodySettings.enabled ? 'Melody On' : 'Melody Off'}</button>
+                </div>
               </div>
               <div className="scale-row" style={{ marginBottom: 16 }}>
                 {([{ label: 'D', value: 50 }, { label: 'E', value: 52 }, { label: 'F', value: 53 }, { label: 'A', value: 57 }] as const).map((key) => (
@@ -2779,6 +3730,35 @@ export default function DroneEnginePage() {
                 <button type="button" className={`btn${melodySettings.duck ? ' active' : ''}`} onClick={() => setMelodySettings((current) => ({ ...current, duck: !current.duck }))}>{melodySettings.duck ? 'Duck On' : 'Duck Off'}</button>
                 <button type="button" className={`btn${melodySettings.tranceGate ? ' active' : ''}`} onClick={() => setMelodySettings((current) => ({ ...current, tranceGate: !current.tranceGate }))}>{melodySettings.tranceGate ? 'Trance Gate On' : 'Trance Gate Off'}</button>
               </div>
+              {melodySettings.composerEnabled ? (
+                <div className="composer-panel">
+                  <div className="composer-section">
+                    <span className="composer-label">Composer mode</span>
+                    <div className="scale-row">
+                      {([{ value: 'hypnotic', label: 'Hypnotic' }, { value: 'emotional', label: 'Emotional' }, { value: 'arpeggio', label: 'Arpeggio' }, { value: 'callResponse', label: 'Call / Response' }] as Array<{ value: MelodyMode; label: string }>).map((mode) => <button key={mode.value} type="button" className={`scale-btn${melodySettings.mode === mode.value ? ' active' : ''}`} onClick={() => updateComposerSetting('mode', mode.value)}>{mode.label}</button>)}
+                    </div>
+                  </div>
+                  <div className="phrase-map" aria-label={`${melodySettings.phraseBars}-bar melodic phrase map`}>
+                    {melodyComposition?.bars.map((bar, barIndex) => (
+                      <div className={`phrase-bar${melodyActiveBar === barIndex && technoPlaying ? ' active' : ''}`} key={`${melodyComposition.seed}-${barIndex}`}>
+                        <div className="phrase-bar-head"><span>{barIndex + 1}</span><strong>{bar.chordLabel}</strong></div>
+                        <div className="phrase-notes">{bar.steps.map((note, step) => <i key={step} className={note ? `phrase-note ${note.role}${note.accent ? ' accent' : ''}` : 'phrase-rest'} style={note ? { bottom: `${Math.min(88, 8 + note.degree * 9)}%`, opacity: note.velocity } : undefined} />)}</div>
+                        <small>{bar.stage}</small>
+                      </div>
+                    )) ?? <span className="notes-empty">Composer is preparing the first phrase…</span>}
+                  </div>
+                  <div className="composer-options">
+                    <div className="composer-section"><span className="composer-label">Phrase length</span><div className="scale-row">{([4, 8, 16] as const).map((bars) => <button key={bars} type="button" className={`scale-btn${melodySettings.phraseBars === bars ? ' active' : ''}`} onClick={() => updateComposerSetting('phraseBars', bars)}>{bars} bars</button>)}</div></div>
+                    <div className="composer-section"><span className="composer-label">Contour</span><div className="scale-row">{([{ value: 'rise', label: 'Rise' }, { value: 'fall', label: 'Fall' }, { value: 'arch', label: 'Arch' }, { value: 'wave', label: 'Wave' }] as Array<{ value: MelodyContour; label: string }>).map((contour) => <button key={contour.value} type="button" className={`scale-btn${melodySettings.contour === contour.value ? ' active' : ''}`} onClick={() => updateComposerSetting('contour', contour.value)}>{contour.label}</button>)}</div></div>
+                    <div className="composer-section composer-wide"><span className="composer-label">Harmony</span><div className="scale-row">{([{ value: 'static', label: 'Static' }, { value: 'deep', label: 'Deep' }, { value: 'classic', label: 'Classic' }, { value: 'rising', label: 'Rising' }] as Array<{ value: MelodyProgression; label: string }>).map((progression) => <button key={progression.value} type="button" className={`scale-btn${melodySettings.progression === progression.value ? ' active' : ''}`} onClick={() => updateComposerSetting('progression', progression.value)}>{progression.label}</button>)}</div></div>
+                  </div>
+                  <div className="composer-sliders">
+                    {([{ key: 'complexity', label: 'Complexity', value: melodySettings.complexity }, { key: 'repetition', label: 'Repetition', value: melodySettings.repetition }, { key: 'variation', label: 'Variation', value: melodySettings.variation }, { key: 'noteLength', label: 'Note length', value: melodySettings.noteLength }] as const).map((control) => <label className="slider-group" key={control.key}><div className="slider-label"><span>{control.label}</span><span>{control.value}%</span></div><input aria-label={`Composer ${control.label}`} type="range" min="0" max="100" step="1" value={control.value} onChange={(event) => updateComposerSetting(control.key, Number(event.target.value))} /></label>)}
+                    <label className="slider-group"><div className="slider-label"><span>Melodic range</span><span>{melodySettings.range} oct</span></div><input aria-label="Composer melodic range" type="range" min="1" max="3" step="1" value={melodySettings.range} onChange={(event) => updateComposerSetting('range', Number(event.target.value))} /></label>
+                  </div>
+                  <div className="sample-help">The phrase remains scale-safe. Composer repeats its central motif, answers it, introduces controlled change, then resolves home before evolving.</div>
+                </div>
+              ) : null}
               <div className="pulse-wander-grid">
                 <div>
                   <div className="slider-group">
@@ -2819,9 +3799,9 @@ export default function DroneEnginePage() {
                 </div>
               </div>
               <div className="btn-row" style={{ marginTop: 16 }}>
-                <button type="button" className="btn" onClick={() => evolveMelodyPhrase(true)}>Evolve Motif</button>
+                <button type="button" className="btn" onClick={() => evolveMelodyPhrase(true)}>{melodySettings.composerEnabled ? 'Evolve Composition' : 'Evolve Motif'}</button>
               </div>
-              <div className="sample-help">Melody evolution {melodyEvolution}: notes only come from the selected root and current scale. Duck follows the kick; Trance Gate rhythmically opens the melodic synth at the selected division.</div>
+              <div className="sample-help">Melody evolution {melodyEvolution}: notes only come from the selected root and current scale. {melodySettings.composerEnabled ? 'Composer changes selected notes while keeping the phrase identity and final cadence.' : 'Legacy mode preserves the original one-bar constrained random walk.'} Duck follows the kick; Trance Gate rhythmically opens the melodic synth at the selected division.</div>
             </div>
 
             <div className="panel panel-full">
