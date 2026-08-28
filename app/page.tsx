@@ -14,9 +14,10 @@ type ModulationShape = 'sine' | 'random';
 type NoiseColor = 'brown' | 'pink' | 'white';
 type SampleMode = 'granular' | 'loop';
 type PulsePattern = 'off' | 'steady' | 'doom' | 'sparse';
-type TechnoPresetName = 'classic' | 'detroit' | 'hardgroove' | 'rumble' | 'broken';
-type TechnoSettings = { bpm: number; hatDensity: number; snareDensity: number; tomActivity: number; evolveBars: number; volume: number; hatPulses: number; snarePulses: number; tomPulses: number; humanize: number; swing: number; kickMode: 'four' | 'broken' };
-type TechnoPattern = { kicks: Set<number>; hats: Set<number>; snares: Set<number>; ghostSnares: Set<number>; toms: Set<number>; hatChance: number };
+type TechnoPresetName = 'dub' | 'glitch' | 'classic' | 'detroit' | 'hardgroove' | 'rumble' | 'broken';
+type TechnoSettings = { bpm: number; hatDensity: number; snareDensity: number; tomActivity: number; evolveBars: number; volume: number; hatPulses: number; snarePulses: number; tomPulses: number; cutKickEnabled: boolean; cutKickLevel: number; rideEnabled: boolean; ridePulses: number; rideChance: number; rideDecay: number; rideTone: number; rideLevel: number; humanize: number; swing: number; kickMode: 'four' | 'broken' | 'glitch' };
+type GlitchHit = { step: number; kind: 'hat' | 'snare' | 'kick'; offsets: number[]; level: number };
+type TechnoPattern = { kicks: Set<number>; hats: Set<number>; rides: Set<number>; snares: Set<number>; ghostSnares: Set<number>; toms: Set<number>; glitches: GlitchHit[]; hatChance: number };
 type MelodySettings = ComposerSettings & { enabled: boolean; composerEnabled: boolean; root: number; density: number; evolveBars: number; brightness: number; volume: number; duck: boolean; duckDepth: number; duckRelease: number; tranceGate: boolean; gateDepth: number; gatePattern: 'quarter' | 'eighth' | 'sixteenth' | 'pulse' };
 type DroneSettings = { basePitch: number; detuneCents: number; oscCount: number; waveform: OscillatorType; modulationShape: ModulationShape; filterRate: number; filterDepth: number; pitchDrift: number; volLfoDepth: number; panDepth: number; noiseColor: NoiseColor; noiseAmount: number; reverbAmount: number; delayAmount: number; delayTime: number; delayFeedback: number; chorusAmount: number; driveAmount: number; masterVolume: number; scale: DroneScaleName; genSpeed: number; maxVoices: number; kickSpace: boolean; kickDuckDepth: number; kickDuckRelease: number; kickBassDuckDepth: number; kickBassDuckRelease: number; kickBassSplit: number; synthLowCut: number; synthHighCut: number; synthCompThreshold: number; synthCompRatio: number; synthLimiterCeiling: number; drumDriveAmount: number; drumCompThreshold: number; drumCompRatio: number; drumLimiterCeiling: number; eqLowGain: number; eqMidGain: number; eqHighGain: number; masterSaturation: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; limiterCeiling: number };
 type DroneVoiceNode = { noteName: string; semitone: number; oscillators: Array<{ osc: OscillatorNode; gain: GainNode }>; subOsc: OscillatorNode; subGain: GainNode; airOsc: OscillatorNode; airGain: GainNode; voiceGain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode; filterLfo: OscillatorNode; filterLfoGain: GainNode; pitchLfo: OscillatorNode; pitchLfoGain: GainNode; volLfo: OscillatorNode; volLfoGain: GainNode; panLfo: OscillatorNode; panLfoGain: GainNode; randomInterval: number | null };
@@ -27,10 +28,17 @@ type MidiMode = 'off' | 'trigger' | 'root';
 type MidiInputPort = { index: number; name: string };
 type MidiMessage = { messageType: 'noteOn' | 'noteOff' | 'clock' | 'start' | 'continue' | 'stop'; channel: number | null; note: number | null; velocity: number | null };
 type MidiStatus = { state: 'connected' | 'disconnected' | 'error'; message: string };
+type RadioStation = { stationuuid: string; name: string; urlResolved: string; country: string; codec: string; bitrate: number; tags: string; homepage: string; hls: number };
+type RadioCapture = { data: number[]; contentType: string };
+type RadioCaptureState = 'idle' | 'capturing' | 'processing';
 type LiveVoice = { oscillators: OscillatorNode[]; subOsc: OscillatorNode; gain: GainNode; filter: BiquadFilterNode; panner: StereoPannerNode };
+type ExportStage = 'idle' | 'encoding' | 'saving' | 'complete' | 'error';
+type ExportState = { stage: ExportStage; progress: number; detail: string };
+type WorkspaceId = 'sound' | 'machine' | 'melody' | 'input' | 'studio';
+type ControlTarget = { label: string; detail: string; workspace: WorkspaceId | 'live' | 'mix'; panel: string };
 type PerformanceMacros = { bloom: number; weight: number; motion: number; distance: number };
-type AcidSettings = { enabled: boolean; cutoff: number; resonance: number; drive: number; octave: number; accent: number; steps: boolean[]; accents: boolean[] };
-type LiveGrid = { kicks: boolean[]; hats: boolean[]; snares: boolean[]; toms: boolean[] };
+type AcidSettings = { enabled: boolean; cutoff: number; resonance: number; drive: number; body: number; echo: number; octave: number; accent: number; evolveBars: number; steps: boolean[]; accents: boolean[]; degrees: number[]; slides: boolean[] };
+type LiveGrid = { kicks: boolean[]; hats: boolean[]; rides: boolean[]; snares: boolean[]; toms: boolean[] };
 type ArtistSceneId = 'longBlend' | 'redline' | 'orbit' | 'reduction' | 'peakPressure';
 type ArtistScene = { id: ArtistSceneId; artist: string; title: string; description: string; settings: Partial<DroneSettings>; techno: Partial<TechnoSettings>; melody: Partial<MelodySettings>; macros: Partial<PerformanceMacros>; acid: Partial<AcidSettings>; rumble: RumbleDna; ritual: number };
 type GestureFrame = { at: number; macros: PerformanceMacros };
@@ -83,9 +91,15 @@ const nameForSemitone = (semitone: number) => `${noteNames[((semitone % 12) + 12
 // row a further octave up, so nothing you play can land off-scale.
 const keyboardRowLower = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'];
 const keyboardRowUpper = ['w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'];
+// Gamma-style split performance: one hand can hold a diatonic chord while
+// the other moves freely through the same scale on the melody rows.
+const chordKeyboardRow = ['z', 'x', 'c', 'v', 'b', 'n', 'm'];
+const romanDegrees = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
 const keyboardKeyMap: Record<string, { degreeIndex: number; octaveOffset: number }> = {};
+const chordKeyMap: Record<string, number> = {};
 keyboardRowLower.forEach((key, index) => { keyboardKeyMap[key] = { degreeIndex: index, octaveOffset: 12 }; });
 keyboardRowUpper.forEach((key, index) => { keyboardKeyMap[key] = { degreeIndex: index, octaveOffset: 24 }; });
+chordKeyboardRow.forEach((key, index) => { chordKeyMap[key] = index; });
 const defaultDroneSettings: DroneSettings = {
   basePitch: 55, detuneCents: 7, oscCount: 5, waveform: 'sine', modulationShape: 'sine', filterRate: 0.05, filterDepth: 0.6,
   pitchDrift: 0.15, volLfoDepth: 0.3, panDepth: 0.35, noiseColor: 'brown', noiseAmount: 0.12,
@@ -104,25 +118,61 @@ const defaultSampleSettings: SampleSettings = { grainRate: 0.5, grainPitch: -12,
 const defaultVocalSettings: VocalSettings = { pitch: 0, formant: 0, tube: 0 };
 const defaultPerformanceMacros: PerformanceMacros = { bloom: 0, weight: 0, motion: 0, distance: 0 };
 const defaultAfterimageSettings: AfterimageSettings = { enabled: true, memory: 62, erosion: 54, mutation: 38 };
-const defaultTechnoSettings: TechnoSettings = { bpm: 132, hatDensity: 68, snareDensity: 32, tomActivity: 34, evolveBars: 8, volume: 56, hatPulses: 9, snarePulses: 1, tomPulses: 2, humanize: 9, swing: 0, kickMode: 'four' };
+// The opening machine leaves air around a low, physical acid line: steady
+// four-to-the-floor pressure, swung hats, sparse percussion, and slow change.
+const defaultTechnoSettings: TechnoSettings = { bpm: 128, hatDensity: 62, snareDensity: 16, tomActivity: 9, evolveBars: 12, volume: 62, hatPulses: 7, snarePulses: 1, tomPulses: 1, cutKickEnabled: false, cutKickLevel: 42, rideEnabled: false, ridePulses: 2, rideChance: 24, rideDecay: 58, rideTone: 42, rideLevel: 24, humanize: 6, swing: 13, kickMode: 'four' };
 const defaultMelodySettings: MelodySettings = { enabled: true, composerEnabled: false, mode: 'hypnotic', phraseBars: 8, complexity: 46, repetition: 76, variation: 32, range: 2, contour: 'arch', progression: 'deep', noteLength: 48, root: 50, density: 48, evolveBars: 8, brightness: 36, volume: 32, duck: false, duckDepth: 62, duckRelease: 220, tranceGate: false, gateDepth: 88, gatePattern: 'eighth' };
 const emptySteps = () => Array.from({ length: 16 }, () => false);
-const defaultAcidSettings: AcidSettings = { enabled: false, cutoff: 42, resonance: 66, drive: 32, octave: 1, accent: 68, steps: [true, false, false, true, false, true, false, false, true, false, true, false, false, true, false, false], accents: [false, false, false, true, false, false, false, false, true, false, false, false, false, true, false, false] };
-const defaultLiveGrid = (): LiveGrid => ({ kicks: emptySteps(), hats: emptySteps(), snares: emptySteps(), toms: emptySteps() });
+// A restrained low-register dub phrase. The rests create room for the echoes;
+// accents and slides make the few notes feel tactile instead of busy.
+const defaultAcidSettings: AcidSettings = { enabled: true, cutoff: 46, resonance: 76, drive: 48, body: 72, echo: 58, octave: 0, accent: 74, evolveBars: 8, steps: [true, false, false, true, false, false, true, false, true, false, false, false, true, false, true, false], accents: [true, false, false, false, false, false, true, false, false, false, false, false, true, false, false, false], degrees: [0, 0, 0, 1, 0, 0, 4, 0, 0, 0, 0, 0, 3, 0, 1, 0], slides: [false, false, false, true, false, false, false, false, false, false, false, false, true, false, true, false] };
+const defaultLiveGrid = (): LiveGrid => ({ kicks: emptySteps(), hats: emptySteps(), rides: emptySteps(), snares: emptySteps(), toms: emptySteps() });
 const mixerChannelMeta: Array<{ id: MixerChannelId; label: string; color: string }> = [
   { id: 'drone', label: 'Drone', color: '#8d7cff' }, { id: 'machine', label: 'Machine', color: '#e17055' },
   { id: 'melody', label: 'Melody', color: '#6fc8ff' }, { id: 'acid', label: 'Acid', color: '#ffd166' },
   { id: 'input', label: 'Input', color: '#00b894' }, { id: 'pulse', label: 'Pulse', color: '#b7ef78' },
   { id: 'ritual', label: 'Ritual', color: '#f58ab3' }, { id: 'master', label: 'Master', color: '#ffffff' },
 ];
+const sideMixerChannels: Record<'left' | 'right', MixerChannelId[]> = {
+  left: ['drone', 'machine', 'melody', 'acid'],
+  right: ['input', 'pulse', 'ritual', 'master'],
+};
+const workspaceMeta: Record<WorkspaceId, { label: string; shortLabel: string; description: string }> = {
+  sound: { label: 'Sound & Motion', shortLabel: 'Sound', description: 'Tone, modulation, scale, space, pulse, and wander.' },
+  machine: { label: 'Dub Machine', shortLabel: 'Machine', description: 'Minimal drums, a low-slung acid line, and live punch grid.' },
+  melody: { label: 'Melody & Keys', shortLabel: 'Melody', description: 'Composer, in-key performance, and MIDI control.' },
+  input: { label: 'Audio Input', shortLabel: 'Input', description: 'Files, microphone, live radio capture, granular playback, and vocal shaping.' },
+  studio: { label: 'Studio & Routing', shortLabel: 'Studio', description: 'Mastering, signal flow, dynamics, and final output.' },
+};
+const controlIndex: ControlTarget[] = [
+  { label: 'Audio Input', detail: 'Files, microphone, open radio, capture, grains, loop, vocal shaping', workspace: 'input', panel: 'audio-input' },
+  { label: 'Tone', detail: 'Oscillators, detune, noise, and voice count', workspace: 'sound', panel: 'tone' },
+  { label: 'Modulation', detail: 'Filter, pitch, volume, and pan movement', workspace: 'sound', panel: 'modulation' },
+  { label: 'Space', detail: 'Reverb, delay, chorus, and drive', workspace: 'sound', panel: 'space' },
+  { label: 'Scale & Generation', detail: 'Scale, pitch, density, and generation speed', workspace: 'sound', panel: 'scale-generation' },
+  { label: 'Pulse & Wander', detail: 'Uneven pulse and slow room drift', workspace: 'sound', panel: 'pulse-wander' },
+  { label: 'Glitch Machine', detail: 'Drums, tempo, bursts, toms, and evolution', workspace: 'machine', panel: 'glitch-machine' },
+  { label: 'Dub Acid Machine', detail: 'Squelch, body, echo, accents, notes, and glides', workspace: 'machine', panel: 'acid' },
+  { label: 'Wizard Grid', detail: 'Live drum punches and gesture recorder', workspace: 'machine', panel: 'wizard-grid' },
+  { label: 'Constrained Melody', detail: 'Composer, contour, progression, and gate', workspace: 'melody', panel: 'melody' },
+  { label: 'In-Key Performance', detail: 'Chord pads, keyboard, transpose, and shine', workspace: 'melody', panel: 'in-key' },
+  { label: 'MIDI Input', detail: 'Ports, note mode, root, and clock sync', workspace: 'melody', panel: 'midi' },
+  { label: 'Mastering', detail: 'EQ, compression, limiting, and saturation', workspace: 'studio', panel: 'mastering' },
+  { label: 'Signal Flow', detail: 'Semi-modular routing and patch cables', workspace: 'studio', panel: 'signal-flow' },
+  { label: 'Ritual Core', detail: 'Memory, mutation, DNA, anchors, and morphing', workspace: 'live', panel: 'ritual-core' },
+  { label: 'Tectonic Performance', detail: 'Macros, freeze, and live signal path', workspace: 'live', panel: 'tectonic' },
+  { label: 'Performance Palette', detail: 'Artist scenes and conductor', workspace: 'live', panel: 'palette' },
+  { label: 'Three-Deck Performance', detail: 'Groove, melody, and atmosphere levels', workspace: 'live', panel: 'decks' },
+  { label: 'Mix Board', detail: 'Channel levels, mute, and three-band EQ', workspace: 'mix', panel: 'mix-board' },
+];
 const defaultMixerChannel = (): MixerChannelSetting => ({ volume: 100, muted: false, low: 0, mid: 0, high: 0 });
 const defaultMixerSettings = (): MixerSettings => Object.fromEntries(mixerChannelMeta.map(({ id }) => [id, { ...defaultMixerChannel(), volume: id === 'acid' ? defaultTechnoSettings.volume : 100 }])) as MixerSettings;
 const artistScenes: Record<ArtistSceneId, ArtistScene> = {
-  longBlend: { id: 'longBlend', artist: 'Carl Cox', title: 'The Long Blend', description: 'Layered groove, broad space, and patient transitions.', settings: { reverbAmount: 0.78, delayAmount: 0.48, chorusAmount: 0.26, driveAmount: 0.055, masterVolume: 0.56 }, techno: { bpm: 130, hatPulses: 9, snarePulses: 2, tomPulses: 2, hatDensity: 74, tomActivity: 38, swing: 13, volume: 66 }, melody: { enabled: true, mode: 'hypnotic', repetition: 82, variation: 24, contour: 'wave', progression: 'deep', density: 52, brightness: 44, volume: 42 }, macros: { bloom: 52, weight: 56, motion: 38, distance: 52 }, acid: { enabled: false }, rumble: 'cavern', ritual: 58 },
-  redline: { id: 'redline', artist: 'Charlotte de Witte', title: 'Redline', description: 'Acid pressure and relentlessly rising tension.', settings: { reverbAmount: 0.44, delayAmount: 0.22, driveAmount: 0.11, filterRate: 0.1, filterDepth: 0.76, masterVolume: 0.58 }, techno: { bpm: 138, hatPulses: 12, snarePulses: 1, tomPulses: 2, hatDensity: 88, tomActivity: 44, evolveBars: 4, volume: 70 }, melody: { enabled: false, mode: 'callResponse', repetition: 86, variation: 28, contour: 'rise', progression: 'static' }, macros: { bloom: 18, weight: 78, motion: 68, distance: 18 }, acid: { enabled: true, cutoff: 64, resonance: 86, drive: 62, octave: 1, accent: 84 }, rumble: 'sub', ritual: 76 },
-  orbit: { id: 'orbit', artist: 'Jeff Mills', title: 'Orbit', description: 'Fast machine dialogue, polyrhythm, and metallic futures.', settings: { reverbAmount: 0.32, delayAmount: 0.36, delayTime: 0.47, filterRate: 0.16, filterDepth: 0.82, pitchDrift: 0.38 }, techno: { bpm: 140, hatPulses: 11, snarePulses: 3, tomPulses: 4, hatDensity: 86, snareDensity: 52, tomActivity: 76, evolveBars: 2, humanize: 4, swing: 5, volume: 64 }, melody: { enabled: true, mode: 'arpeggio', complexity: 76, repetition: 54, variation: 62, contour: 'wave', progression: 'rising', density: 68, brightness: 74, volume: 38 }, macros: { bloom: 24, weight: 50, motion: 92, distance: 28 }, acid: { enabled: true, cutoff: 48, resonance: 72, drive: 38, octave: 2, accent: 72 }, rumble: 'metal', ritual: 66 },
-  reduction: { id: 'reduction', artist: 'Richie Hawtin', title: 'Reduction', description: 'Less material, more movement: a recorded gesture becomes the arrangement.', settings: { reverbAmount: 0.56, delayAmount: 0.28, chorusAmount: 0.12, driveAmount: 0.035, filterRate: 0.04, filterDepth: 0.48 }, techno: { bpm: 128, hatPulses: 6, snarePulses: 1, tomPulses: 0, hatDensity: 62, snareDensity: 12, tomActivity: 8, evolveBars: 12, humanize: 2, swing: 0, volume: 52 }, melody: { enabled: false, mode: 'hypnotic', complexity: 24, repetition: 94, variation: 14, range: 1, contour: 'arch', progression: 'static' }, macros: { bloom: 42, weight: 40, motion: 32, distance: 48 }, acid: { enabled: false }, rumble: 'dust', ritual: 44 },
-  peakPressure: { id: 'peakPressure', artist: 'Adam Beyer', title: 'Peak Pressure', description: 'Punch, roll, rumble, and a clear route to the peak.', settings: { reverbAmount: 0.48, delayAmount: 0.2, driveAmount: 0.09, drumDriveAmount: 0.18, kickBassDuckDepth: 91, masterVolume: 0.58 }, techno: { bpm: 136, hatPulses: 12, snarePulses: 1, tomPulses: 3, hatDensity: 87, snareDensity: 28, tomActivity: 80, evolveBars: 4, humanize: 7, swing: 7, volume: 72 }, melody: { enabled: true, mode: 'callResponse', complexity: 42, repetition: 74, variation: 54, contour: 'rise', progression: 'classic', density: 28, brightness: 28, volume: 24, tranceGate: true, gatePattern: 'eighth' }, macros: { bloom: 28, weight: 88, motion: 62, distance: 22 }, acid: { enabled: false }, rumble: 'sub', ritual: 82 },
+  longBlend: { id: 'longBlend', artist: 'Carl Cox', title: 'The Long Blend', description: 'Layered groove, broad space, and patient transitions.', settings: { reverbAmount: 0.78, delayAmount: 0.48, chorusAmount: 0.26, driveAmount: 0.055, masterVolume: 0.56 }, techno: { bpm: 130, hatPulses: 9, snarePulses: 2, tomPulses: 2, cutKickEnabled: false, cutKickLevel: 42, rideEnabled: true, ridePulses: 3, rideChance: 52, rideDecay: 54, rideTone: 52, rideLevel: 34, hatDensity: 74, tomActivity: 38, swing: 13, volume: 66 }, melody: { enabled: true, mode: 'hypnotic', repetition: 82, variation: 24, contour: 'wave', progression: 'deep', density: 52, brightness: 44, volume: 42 }, macros: { bloom: 52, weight: 56, motion: 38, distance: 52 }, acid: { enabled: false }, rumble: 'cavern', ritual: 58 },
+  redline: { id: 'redline', artist: 'Charlotte de Witte', title: 'Redline', description: 'Acid pressure and relentlessly rising tension.', settings: { reverbAmount: 0.44, delayAmount: 0.22, driveAmount: 0.11, filterRate: 0.1, filterDepth: 0.76, masterVolume: 0.58 }, techno: { bpm: 138, hatPulses: 12, snarePulses: 1, tomPulses: 2, cutKickEnabled: true, cutKickLevel: 74, rideEnabled: true, ridePulses: 5, rideChance: 78, rideDecay: 48, rideTone: 70, rideLevel: 44, hatDensity: 88, tomActivity: 44, evolveBars: 4, volume: 70 }, melody: { enabled: false, mode: 'callResponse', repetition: 86, variation: 28, contour: 'rise', progression: 'static' }, macros: { bloom: 18, weight: 78, motion: 68, distance: 18 }, acid: { enabled: true, cutoff: 64, resonance: 86, drive: 62, octave: 1, accent: 84 }, rumble: 'sub', ritual: 76 },
+  orbit: { id: 'orbit', artist: 'Jeff Mills', title: 'Orbit', description: 'Fast machine dialogue, polyrhythm, and metallic futures.', settings: { reverbAmount: 0.32, delayAmount: 0.36, delayTime: 0.47, filterRate: 0.16, filterDepth: 0.82, pitchDrift: 0.38 }, techno: { bpm: 140, hatPulses: 11, snarePulses: 3, tomPulses: 4, cutKickEnabled: true, cutKickLevel: 58, rideEnabled: true, ridePulses: 7, rideChance: 74, rideDecay: 62, rideTone: 74, rideLevel: 40, hatDensity: 86, snareDensity: 52, tomActivity: 76, evolveBars: 2, humanize: 4, swing: 5, volume: 64 }, melody: { enabled: true, mode: 'arpeggio', complexity: 76, repetition: 54, variation: 62, contour: 'wave', progression: 'rising', density: 68, brightness: 74, volume: 38 }, macros: { bloom: 24, weight: 50, motion: 92, distance: 28 }, acid: { enabled: true, cutoff: 48, resonance: 72, drive: 38, octave: 2, accent: 72 }, rumble: 'metal', ritual: 66 },
+  reduction: { id: 'reduction', artist: 'Richie Hawtin', title: 'Reduction', description: 'Less material, more movement: a recorded gesture becomes the arrangement.', settings: { reverbAmount: 0.56, delayAmount: 0.28, chorusAmount: 0.12, driveAmount: 0.035, filterRate: 0.04, filterDepth: 0.48 }, techno: { bpm: 128, hatPulses: 6, snarePulses: 1, tomPulses: 0, cutKickEnabled: false, cutKickLevel: 38, rideEnabled: false, ridePulses: 0, rideChance: 0, rideDecay: 44, rideTone: 46, rideLevel: 28, hatDensity: 62, snareDensity: 12, tomActivity: 8, evolveBars: 12, humanize: 2, swing: 0, volume: 52 }, melody: { enabled: false, mode: 'hypnotic', complexity: 24, repetition: 94, variation: 14, range: 1, contour: 'arch', progression: 'static' }, macros: { bloom: 42, weight: 40, motion: 32, distance: 48 }, acid: { enabled: false }, rumble: 'dust', ritual: 44 },
+  peakPressure: { id: 'peakPressure', artist: 'Adam Beyer', title: 'Peak Pressure', description: 'Punch, roll, rumble, and a clear route to the peak.', settings: { reverbAmount: 0.48, delayAmount: 0.2, driveAmount: 0.09, drumDriveAmount: 0.18, kickBassDuckDepth: 91, masterVolume: 0.58 }, techno: { bpm: 136, hatPulses: 12, snarePulses: 1, tomPulses: 3, cutKickEnabled: true, cutKickLevel: 86, rideEnabled: true, ridePulses: 8, rideChance: 84, rideDecay: 52, rideTone: 68, rideLevel: 52, hatDensity: 87, snareDensity: 28, tomActivity: 80, evolveBars: 4, humanize: 7, swing: 7, volume: 72 }, melody: { enabled: true, mode: 'callResponse', complexity: 42, repetition: 74, variation: 54, contour: 'rise', progression: 'classic', density: 28, brightness: 28, volume: 24, tranceGate: true, gatePattern: 'eighth' }, macros: { bloom: 28, weight: 88, motion: 62, distance: 22 }, acid: { enabled: false }, rumble: 'sub', ritual: 82 },
 };
 const clamp = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
 const lerp = (from: number, to: number, amount: number) => from + (to - from) * amount;
@@ -133,6 +183,7 @@ const euclideanSteps = (pulses: number, steps = 16, rotation = 0) => {
   return new Set(Array.from({ length: steps }, (_, step) => step).filter((step) => (((step - rotation + steps) % steps) * count) % steps < count));
 };
 const MIC_MAX_SECONDS = 60;
+const RADIO_MAX_SECONDS = 30;
 // Overall level for uploaded/recorded Audio Input playback. Was 0.4 — far
 // too conservative next to grain envelope peaks that were already quiet,
 // so samples were nearly inaudible; the master compressor keeps this safe.
@@ -260,11 +311,22 @@ export default function DroneEnginePage() {
   const [micState, setMicState] = useState<'idle' | 'requesting' | 'recording' | 'processing'>('idle');
   const [micTime, setMicTime] = useState('00:00');
   const [micError, setMicError] = useState<string | null>(null);
+  const [radioQuery, setRadioQuery] = useState('dub');
+  const [radioResults, setRadioResults] = useState<RadioStation[]>([]);
+  const [radioSearching, setRadioSearching] = useState(false);
+  const [radioUrl, setRadioUrl] = useState('');
+  const [radioName, setRadioName] = useState('Custom station');
+  const [radioPlaying, setRadioPlaying] = useState(false);
+  const [radioError, setRadioError] = useState<string | null>(null);
+  const [radioCaptureState, setRadioCaptureState] = useState<RadioCaptureState>('idle');
+  const [radioCaptureSeconds, setRadioCaptureSeconds] = useState(12);
+  const [radioCaptureTime, setRadioCaptureTime] = useState(0);
 
   // Record & Export: capture the full mix and download it as an MP3.
   const [isRecording, setIsRecording] = useState(false);
   const [recordTime, setRecordTime] = useState('00:00');
   const [recordStatus, setRecordStatus] = useState('Idle');
+  const [exportState, setExportState] = useState<ExportState>({ stage: 'idle', progress: 0, detail: '' });
 
   // Pulse: an occasional soft sub thump, timed with uneven step ratios
   // (a nod to doom-loop's ratio-based step sequencer) rather than a strict beat.
@@ -272,10 +334,10 @@ export default function DroneEnginePage() {
   const [pulseSpeed, setPulseSpeed] = useState(1.4);
   const [pulseDepth, setPulseDepth] = useState(50);
 
-  // Minimal Machine: the kick is deliberately invariant; all movement is
-  // confined to the smaller voices so the rhythm stays hypnotic.
+  // Dub is the opening state: sparse enough to make the acid line and its
+  // echoes the center of gravity. Faster and more fractured routes remain.
   const [technoSettings, setTechnoSettings] = useState<TechnoSettings>(defaultTechnoSettings);
-  const [technoPreset, setTechnoPreset] = useState<TechnoPresetName | 'mix'>('classic');
+  const [technoPreset, setTechnoPreset] = useState<TechnoPresetName | 'mix'>('dub');
   const [melodySettings, setMelodySettings] = useState<MelodySettings>(defaultMelodySettings);
   const [melodyEvolution, setMelodyEvolution] = useState(0);
   const [melodyComposition, setMelodyComposition] = useState<MelodyComposition | null>(null);
@@ -294,6 +356,7 @@ export default function DroneEnginePage() {
   // to Pulse/Wander rather than the primary interaction.
   const [keyboardPlayOn, setKeyboardPlayOn] = useState(false);
   const [activeKeys, setActiveKeys] = useState<Record<string, boolean>>({});
+  const [chordVoicing, setChordVoicing] = useState<'triad' | 'seventh'>('triad');
   const [keyboardTranspose, setKeyboardTranspose] = useState(0);
   const [keyboardShine, setKeyboardShine] = useState(35);
   const [midiPorts, setMidiPorts] = useState<MidiInputPort[]>([]);
@@ -320,6 +383,7 @@ export default function DroneEnginePage() {
   // Performance additions stay alongside the existing patch: they are silent
   // until explicitly armed, so the original instrument always opens unchanged.
   const [acidSettings, setAcidSettings] = useState<AcidSettings>(defaultAcidSettings);
+  const [acidEvolution, setAcidEvolution] = useState(0);
   const [liveGrid, setLiveGrid] = useState<LiveGrid>(defaultLiveGrid);
   const [liveGridArmed, setLiveGridArmed] = useState(false);
   const [activeArtistScene, setActiveArtistScene] = useState<ArtistSceneId | null>(null);
@@ -334,6 +398,10 @@ export default function DroneEnginePage() {
   const [mixBoardOpen, setMixBoardOpen] = useState(false);
   const [mixerSettings, setMixerSettings] = useState<MixerSettings>(defaultMixerSettings);
   const [masterMeter, setMasterMeter] = useState<MasterMeter>({ compressor: 0, limiter: 0 });
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceId | null>(null);
+  const [workspacePinned, setWorkspacePinned] = useState(false);
+  const [controlFinderOpen, setControlFinderOpen] = useState(false);
+  const [controlQuery, setControlQuery] = useState('');
 
   const graphRef = useRef<Graph | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -367,7 +435,7 @@ export default function DroneEnginePage() {
   const technoTimerRef = useRef<number | null>(null);
   const technoStepRef = useRef(0);
   const technoBarRef = useRef(0);
-  const technoPatternRef = useRef<TechnoPattern>({ kicks: euclideanSteps(4), hats: euclideanSteps(defaultTechnoSettings.hatPulses), snares: euclideanSteps(defaultTechnoSettings.snarePulses, 16, 12), ghostSnares: new Set(), toms: new Set(), hatChance: 0.68 });
+  const technoPatternRef = useRef<TechnoPattern>({ kicks: new Set([0, 3, 6, 8, 10, 13, 15]), hats: euclideanSteps(defaultTechnoSettings.hatPulses), rides: euclideanSteps(defaultTechnoSettings.ridePulses), snares: new Set([4, 7, 12]), ghostSnares: new Set([6, 14]), toms: new Set(), glitches: [], hatChance: 0.84 });
   const melodyPhraseRef = useRef<Array<number | null>>(Array(16).fill(null));
   const melodyCompositionRef = useRef<MelodyComposition | null>(null);
   const melodyActiveBarRef = useRef(0);
@@ -390,6 +458,8 @@ export default function DroneEnginePage() {
   const recordedRightRef = useRef<Float32Array[]>([]);
   const recordStartRef = useRef(0);
   const recordTickRef = useRef<number | null>(null);
+  const exportBlockingRef = useRef(false);
+  const workspacePreferencesLoadedRef = useRef(false);
   const ritualLeftRef = useRef<Float32Array[]>([]);
   const ritualRightRef = useRef<Float32Array[]>([]);
   const afterimageRef = useRef(afterimage);
@@ -406,6 +476,18 @@ export default function DroneEnginePage() {
   const micStartRef = useRef(0);
   const micTickRef = useRef<number | null>(null);
   const micStopRef = useRef<() => void>(() => {});
+  const radioElementRef = useRef<HTMLAudioElement | null>(null);
+  const radioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const radioMonitorGainRef = useRef<GainNode | null>(null);
+  const radioCaptureProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const radioCaptureMuteRef = useRef<GainNode | null>(null);
+  const radioCaptureLeftRef = useRef<Float32Array[]>([]);
+  const radioCaptureRightRef = useRef<Float32Array[]>([]);
+  const radioCaptureStartedRef = useRef(0);
+  const radioCaptureTickRef = useRef<number | null>(null);
+  const radioCaptureStopRef = useRef<() => void>(() => {});
+  const radioCaptureVersionRef = useRef(0);
+  const radioStationNameRef = useRef('Custom station');
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => { technoSettingsRef.current = technoSettings; }, [technoSettings]);
@@ -419,6 +501,37 @@ export default function DroneEnginePage() {
   useEffect(() => { acidSettingsRef.current = acidSettings; }, [acidSettings]);
   useEffect(() => { liveGridRef.current = liveGrid; }, [liveGrid]);
   useEffect(() => { liveGridArmedRef.current = liveGridArmed; }, [liveGridArmed]);
+  useEffect(() => { radioStationNameRef.current = radioName; }, [radioName]);
+  useEffect(() => { exportBlockingRef.current = exportState.stage === 'encoding' || exportState.stage === 'saving'; }, [exportState.stage]);
+  useEffect(() => {
+    const restore = window.setTimeout(() => {
+      try {
+        const saved = window.localStorage.getItem('hi-drone-workspace');
+        const parsed = saved ? JSON.parse(saved) as { active?: WorkspaceId; pinned?: boolean } : null;
+        workspacePreferencesLoadedRef.current = true;
+        if (parsed?.active && workspaceMeta[parsed.active] && parsed.pinned) {
+          setActiveWorkspace(parsed.active);
+          setWorkspacePinned(true);
+        }
+      } catch { workspacePreferencesLoadedRef.current = true; }
+    }, 0);
+    return () => window.clearTimeout(restore);
+  }, []);
+  useEffect(() => {
+    if (!workspacePreferencesLoadedRef.current) return;
+    try { window.localStorage.setItem('hi-drone-workspace', JSON.stringify({ active: activeWorkspace, pinned: workspacePinned })); } catch { /* Storage can be unavailable in private webviews. */ }
+  }, [activeWorkspace, workspacePinned]);
+  useEffect(() => {
+    const handleFinderShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setControlFinderOpen((current) => !current);
+      }
+      if (event.key === 'Escape') setControlFinderOpen(false);
+    };
+    window.addEventListener('keydown', handleFinderShortcut);
+    return () => window.removeEventListener('keydown', handleFinderShortcut);
+  }, []);
   useEffect(() => {
     midiModeRef.current = midiMode;
     if (midiMode !== 'root') { midiRootNoteRef.current = null; midiHeldRootsRef.current.clear(); }
@@ -1651,6 +1764,237 @@ export default function DroneEnginePage() {
     if (micState === 'recording') stopMicRecording(); else void startMicRecording();
   }, [micState, stopMicRecording, startMicRecording]);
 
+  // ── Open radio sampler — discover streams through the public-domain
+  // Radio Browser directory, monitor one through the Input bus, then capture
+  // a short CORS-enabled excerpt into the same granular/loop sample engine. ──
+
+  const searchRadio = useCallback(async () => {
+    setRadioSearching(true);
+    setRadioError(null);
+    try {
+      let stations: RadioStation[];
+      if (isTauri()) {
+        stations = await invoke<RadioStation[]>('search_radio_stations', { query: radioQuery.trim() });
+      } else {
+        const endpoint = radioQuery.trim()
+          ? `https://all.api.radio-browser.info/json/stations/search?name=${encodeURIComponent(radioQuery.trim())}&hidebroken=true&order=clickcount&reverse=true&limit=18`
+          : 'https://all.api.radio-browser.info/json/stations/topclick/18?hidebroken=true';
+        const response = await fetch(endpoint);
+        if (!response.ok) throw new Error(`Directory returned ${response.status}`);
+        const raw = await response.json() as Array<Record<string, unknown>>;
+        stations = raw.map((station) => ({
+          stationuuid: String(station.stationuuid ?? ''), name: String(station.name ?? ''),
+          urlResolved: String(station.url_resolved ?? ''), country: String(station.country ?? ''),
+          codec: String(station.codec ?? ''), bitrate: Number(station.bitrate ?? 0),
+          tags: String(station.tags ?? ''), homepage: String(station.homepage ?? ''), hls: Number(station.hls ?? 0),
+        })).filter((station) => station.urlResolved.startsWith('https://') && !station.hls);
+      }
+      setRadioResults(stations);
+      if (!stations.length) setRadioError('No compatible HTTPS radio streams found. Try a broader station name or genre.');
+    } catch (error) {
+      setRadioResults([]);
+      setRadioError(error instanceof Error ? error.message : String(error || 'The radio directory is unavailable right now.'));
+    } finally {
+      setRadioSearching(false);
+    }
+  }, [radioQuery]);
+
+  const disconnectRadioMonitor = useCallback(() => {
+    const audio = radioElementRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+    }
+    try { radioSourceRef.current?.disconnect(); } catch {}
+    try { radioMonitorGainRef.current?.disconnect(); } catch {}
+    radioElementRef.current = null;
+    radioSourceRef.current = null;
+    radioMonitorGainRef.current = null;
+    setRadioPlaying(false);
+  }, []);
+
+  const stopRadio = useCallback(() => {
+    radioCaptureVersionRef.current += 1;
+    if (radioCaptureTickRef.current) { window.clearInterval(radioCaptureTickRef.current); radioCaptureTickRef.current = null; }
+    const processor = radioCaptureProcessorRef.current;
+    if (processor) processor.onaudioprocess = null;
+    try { processor?.disconnect(); } catch {}
+    try { radioCaptureMuteRef.current?.disconnect(); } catch {}
+    radioCaptureProcessorRef.current = null;
+    radioCaptureMuteRef.current = null;
+    radioCaptureLeftRef.current = [];
+    radioCaptureRightRef.current = [];
+    setRadioCaptureState('idle');
+    setRadioCaptureTime(0);
+    disconnectRadioMonitor();
+  }, [disconnectRadioMonitor]);
+
+  const startRadio = useCallback(async (url: string, name: string) => {
+    setRadioError(null);
+    if (!url.startsWith('https://')) {
+      setRadioError('Use a direct HTTPS MP3 or AAC stream URL. Playlist and insecure HTTP links are not supported.');
+      return;
+    }
+    stopRadio();
+    try {
+      const graph = await ensureAudio();
+      const audio = new Audio();
+      if (!isTauri()) audio.crossOrigin = 'anonymous';
+      audio.preload = 'none';
+      audio.src = url;
+      radioElementRef.current = audio;
+      if (!isTauri()) {
+        const source = graph.context.createMediaElementSource(audio);
+        const monitorGain = graph.context.createGain();
+        monitorGain.gain.value = 0.72;
+        source.connect(monitorGain);
+        monitorGain.connect(graph.mixerChannels.input.input);
+        radioSourceRef.current = source;
+        radioMonitorGainRef.current = monitorGain;
+      }
+      radioStationNameRef.current = name;
+      setRadioName(name);
+      setRadioUrl(url);
+      audio.addEventListener('error', () => {
+        setRadioError('This station could not be played. Try another direct HTTPS stream.');
+        disconnectRadioMonitor();
+      }, { once: true });
+      await audio.play();
+      setRadioPlaying(true);
+    } catch (error) {
+      disconnectRadioMonitor();
+      setRadioError(error instanceof Error ? `Radio playback failed: ${error.message}` : 'Radio playback failed.');
+    }
+  }, [disconnectRadioMonitor, ensureAudio, stopRadio]);
+
+  const commitRadioBuffer = useCallback((buffer: AudioBuffer) => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    if (radioCaptureTickRef.current) { window.clearInterval(radioCaptureTickRef.current); radioCaptureTickRef.current = null; }
+    disconnectRadioMonitor();
+    stopSampleEngine();
+    graph.sampleBuffer = buffer;
+    graph.sampleOriginalBuffer = buffer;
+    samplePositionRef.current = 0;
+    granularPositionRef.current = 0;
+    sampleActiveRef.current = true;
+    setSamplePosition(0);
+    setSampleActive(true);
+    setSampleLoaded(true);
+    setSampleDuration(buffer.duration);
+    setSampleName(`Radio capture — ${radioStationNameRef.current}`);
+    setSampleMeta(`${Math.round(buffer.sampleRate)} Hz • ${buffer.numberOfChannels}ch • ${buffer.duration.toFixed(1)}s • live radio`);
+    setSampleStatus('Loaded');
+    setRadioCaptureState('idle');
+    setRadioCaptureTime(0);
+    if (sampleMode === 'granular') startGranular(); else startLoop();
+  }, [disconnectRadioMonitor, sampleMode, startGranular, startLoop, stopSampleEngine]);
+
+  const finishRadioCapture = useCallback(() => {
+    const graph = graphRef.current;
+    const processor = radioCaptureProcessorRef.current;
+    if (!graph || !processor) return;
+    if (radioCaptureTickRef.current) { window.clearInterval(radioCaptureTickRef.current); radioCaptureTickRef.current = null; }
+    processor.onaudioprocess = null;
+    try { radioSourceRef.current?.disconnect(processor); } catch {}
+    try { processor.disconnect(); } catch {}
+    try { radioCaptureMuteRef.current?.disconnect(); } catch {}
+    radioCaptureProcessorRef.current = null;
+    radioCaptureMuteRef.current = null;
+    setRadioCaptureState('processing');
+
+    const leftChunks = radioCaptureLeftRef.current;
+    const rightChunks = radioCaptureRightRef.current;
+    const totalLength = leftChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const hasSignal = leftChunks.some((chunk) => {
+      for (let index = 0; index < chunk.length; index += 32) if (Math.abs(chunk[index]) > 0.00005) return true;
+      return false;
+    });
+    radioCaptureLeftRef.current = [];
+    radioCaptureRightRef.current = [];
+    if (totalLength < graph.context.sampleRate / 2 || !hasSignal) {
+      setRadioCaptureState('idle');
+      setRadioCaptureTime(0);
+      setRadioError('No capturable audio arrived. This station may block cross-origin sampling; try another stream.');
+      return;
+    }
+
+    const buffer = graph.context.createBuffer(2, totalLength, graph.context.sampleRate);
+    let offset = 0;
+    leftChunks.forEach((left, index) => {
+      buffer.getChannelData(0).set(left, offset);
+      buffer.getChannelData(1).set(rightChunks[index] ?? left, offset);
+      offset += left.length;
+    });
+    commitRadioBuffer(buffer);
+  }, [commitRadioBuffer]);
+
+  useEffect(() => { radioCaptureStopRef.current = finishRadioCapture; }, [finishRadioCapture]);
+
+  const startRadioCapture = useCallback(() => {
+    const graph = graphRef.current;
+    const source = radioSourceRef.current;
+    if (!graph || !radioPlaying || (!isTauri() && !source)) {
+      setRadioError('Start monitoring a station before capturing it.');
+      return;
+    }
+    setRadioError(null);
+    radioCaptureStartedRef.current = Date.now();
+    setRadioCaptureTime(0);
+    setRadioCaptureState('capturing');
+
+    if (isTauri()) {
+      const version = ++radioCaptureVersionRef.current;
+      radioCaptureTickRef.current = window.setInterval(() => {
+        setRadioCaptureTime(Math.min(radioCaptureSeconds, (Date.now() - radioCaptureStartedRef.current) / 1000));
+      }, 100);
+      void invoke<RadioCapture>('capture_radio_stream', { url: radioUrl, seconds: radioCaptureSeconds }).then(async (capture) => {
+        if (version !== radioCaptureVersionRef.current) return;
+        setRadioCaptureState('processing');
+        const encoded = Uint8Array.from(capture.data).buffer;
+        const decoded = await graph.context.decodeAudioData(encoded);
+        if (version === radioCaptureVersionRef.current) commitRadioBuffer(decoded);
+      }).catch((error: unknown) => {
+        if (version !== radioCaptureVersionRef.current) return;
+        if (radioCaptureTickRef.current) { window.clearInterval(radioCaptureTickRef.current); radioCaptureTickRef.current = null; }
+        setRadioCaptureState('idle');
+        setRadioCaptureTime(0);
+        setRadioError(error instanceof Error ? error.message : String(error));
+      });
+      return;
+    }
+
+    if (!source) return;
+    radioCaptureLeftRef.current = [];
+    radioCaptureRightRef.current = [];
+    const processor = graph.context.createScriptProcessor(4096, 2, 2);
+    const mute = graph.context.createGain();
+    mute.gain.value = 0;
+    processor.onaudioprocess = (event) => {
+      const left = event.inputBuffer.getChannelData(0).slice();
+      const right = event.inputBuffer.numberOfChannels > 1 ? event.inputBuffer.getChannelData(1).slice() : left.slice();
+      radioCaptureLeftRef.current.push(left);
+      radioCaptureRightRef.current.push(right);
+    };
+    source.connect(processor);
+    processor.connect(mute);
+    mute.connect(graph.context.destination);
+    radioCaptureProcessorRef.current = processor;
+    radioCaptureMuteRef.current = mute;
+    radioCaptureTickRef.current = window.setInterval(() => {
+      const elapsed = (Date.now() - radioCaptureStartedRef.current) / 1000;
+      setRadioCaptureTime(elapsed);
+      if (elapsed >= radioCaptureSeconds) radioCaptureStopRef.current();
+    }, 100);
+  }, [commitRadioBuffer, radioCaptureSeconds, radioPlaying, radioUrl]);
+
+  const toggleRadioCapture = useCallback(() => {
+    if (radioCaptureState === 'capturing') finishRadioCapture(); else startRadioCapture();
+  }, [finishRadioCapture, radioCaptureState, startRadioCapture]);
+
+  useEffect(() => () => { stopRadio(); }, [stopRadio]);
+
   // ── Record & Export: capture the master mix and encode to MP3 ──
 
   const updateRecordTime = useCallback(() => {
@@ -1674,6 +2018,11 @@ export default function DroneEnginePage() {
       recordedLeftRef.current = [];
       recordedRightRef.current = [];
 
+      setExportState({ stage: 'encoding', progress: 4, detail: 'Loading the MP3 encoder…' });
+      // Let the overlay paint before importing/encoding, then yield in the
+      // encode loop too. This keeps progress honest instead of showing a
+      // frozen dialog while a long performance is being rendered.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
       // Dynamically imported so the encoder never has to load until someone
       // actually exports a recording. @breezystack/lamejs is a maintained,
       // ESM-native fork of lamejs — the original `lamejs` package throws
@@ -1682,12 +2031,19 @@ export default function DroneEnginePage() {
       const encoder = new Mp3Encoder(2, graph.context.sampleRate, 128);
       const mp3Data: Uint8Array[] = [];
       const blockSize = 1152;
+      const totalBlocks = Math.max(1, Math.ceil(leftData.length / blockSize));
       for (let index = 0; index < leftData.length; index += blockSize) {
         const leftChunk = floatTo16BitPCM(leftData.subarray(index, index + blockSize));
         const rightChunk = floatTo16BitPCM(rightData.subarray(index, index + blockSize));
         const buffer = encoder.encodeBuffer(leftChunk, rightChunk);
         if (buffer.length > 0) mp3Data.push(new Uint8Array(buffer));
+        const block = Math.floor(index / blockSize) + 1;
+        if (block === totalBlocks || block % 32 === 0) {
+          setExportState({ stage: 'encoding', progress: Math.min(94, 7 + Math.round(block / totalBlocks * 87)), detail: `Rendering master · ${block}/${totalBlocks} blocks` });
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        }
       }
+      setExportState({ stage: 'encoding', progress: 96, detail: 'Finalizing MP3…' });
       const tail = encoder.flush();
       if (tail.length > 0) mp3Data.push(new Uint8Array(tail));
 
@@ -1704,12 +2060,16 @@ export default function DroneEnginePage() {
       // so exports there go through Tauri's native save dialog + fs write
       // instead. The web build keeps the plain browser download.
       if (isTauri()) {
+        setExportState({ stage: 'saving', progress: 97, detail: 'Choose where to save your performance' });
         const path = await saveFileDialog({ defaultPath: filename, filters: [{ name: 'MP3 Audio', extensions: ['mp3'] }] });
         if (path) {
+          setExportState({ stage: 'saving', progress: 99, detail: 'Writing MP3 to disk…' });
           await writeFile(path, mp3Bytes);
           setRecordStatus(`Saved ${sizeMb} MB`);
+          setExportState({ stage: 'complete', progress: 100, detail: `Saved ${sizeMb} MB` });
         } else {
           setRecordStatus('Export cancelled');
+          setExportState({ stage: 'complete', progress: 100, detail: 'Export cancelled' });
         }
       } else {
         const blob = new Blob([mp3Bytes], { type: 'audio/mp3' });
@@ -1722,11 +2082,13 @@ export default function DroneEnginePage() {
         document.body.removeChild(link);
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
         setRecordStatus(`Exported ${sizeMb} MB`);
+        setExportState({ stage: 'complete', progress: 100, detail: `Exported ${sizeMb} MB` });
       }
       setRecordTime('00:00');
     } catch (error) {
       const reason = error instanceof Error ? error.message : typeof error === 'string' ? error : 'unknown error';
       setRecordStatus(`Export failed: ${reason}`);
+      setExportState({ stage: 'error', progress: 0, detail: `Export failed: ${reason}` });
     }
   }, []);
 
@@ -1740,7 +2102,8 @@ export default function DroneEnginePage() {
     graph.limiter.connect(graph.ritualProcessor);
     graph.recordProcessor = null;
     setIsRecording(false);
-    setRecordStatus('Encoding MP3…');
+    setRecordStatus('Preparing export…');
+    setExportState({ stage: 'encoding', progress: 1, detail: 'Preparing the performance master…' });
     window.setTimeout(() => { void encodeAndDownload(); }, 50);
   }, [encodeAndDownload]);
 
@@ -1770,6 +2133,7 @@ export default function DroneEnginePage() {
     recordStartRef.current = Date.now();
     setIsRecording(true);
     setRecordStatus('Recording');
+    setExportState({ stage: 'idle', progress: 0, detail: '' });
     setRecordTime('00:00');
     recordTickRef.current = window.setInterval(updateRecordTime, 100);
   }, [ensureAudio, updateRecordTime]);
@@ -1777,6 +2141,11 @@ export default function DroneEnginePage() {
   const toggleRecording = useCallback(() => {
     if (isRecording) stopRecording(); else void startRecording();
   }, [isRecording, startRecording, stopRecording]);
+
+  const dismissExportState = useCallback(() => {
+    if (exportBlockingRef.current) return;
+    setExportState({ stage: 'idle', progress: 0, detail: '' });
+  }, []);
 
   // ── Minimal Machine: a fixed kick with slowly mutating detail ───
 
@@ -1954,42 +2323,96 @@ export default function DroneEnginePage() {
   const evolveTechnoPattern = useCallback(() => {
     const current = technoSettingsRef.current;
     const brokenKicks = [[0, 3, 7, 10, 12, 15], [0, 4, 7, 9, 12, 14], [0, 3, 6, 10, 12, 15]];
+    const glitchKicks = [[0, 3, 6, 8, 10, 13, 15], [0, 2, 5, 7, 8, 11, 14], [0, 3, 4, 7, 9, 12, 14, 15], [0, 2, 6, 8, 10, 11, 13, 15]];
+    const glitchSnares = [[4, 7, 12], [3, 6, 10, 14], [4, 6, 11, 13], [2, 7, 10, 12, 15]];
+    const isGlitch = current.kickMode === 'glitch';
     const kicks = current.kickMode === 'four'
       ? euclideanSteps(4)
-      : new Set(brokenKicks[Math.floor(nextRandom() * brokenKicks.length)]);
-    const hats = euclideanSteps(current.hatPulses, 16, Math.floor(nextRandom() * 4));
-    const snares = euclideanSteps(current.snarePulses, 16, 12);
+      : new Set((isGlitch ? glitchKicks : brokenKicks)[Math.floor(nextRandom() * (isGlitch ? glitchKicks.length : brokenKicks.length))]);
+    const hats = euclideanSteps(current.hatPulses, 16, Math.floor(nextRandom() * (isGlitch ? 8 : 4)));
+    if (isGlitch) [1, 5, 9, 14].forEach((step) => { if (nextRandom() < 0.56) hats.add(step); });
+    const rides = current.rideEnabled ? euclideanSteps(current.ridePulses, 16) : new Set<number>();
+    const snares = isGlitch
+      ? new Set(glitchSnares[Math.floor(nextRandom() * glitchSnares.length)])
+      : euclideanSteps(current.snarePulses, 16, 12);
     const ghostSnares = new Set<number>();
-    [5, 6, 10, 11, 14].forEach((step) => {
-      if (nextRandom() < current.snareDensity / 240) ghostSnares.add(step);
+    (isGlitch ? [1, 2, 5, 6, 9, 10, 13, 14, 15] : [5, 6, 10, 11, 14]).forEach((step) => {
+      if (nextRandom() < current.snareDensity / (isGlitch ? 145 : 240)) ghostSnares.add(step);
     });
     const toms = new Set<number>();
     if (nextRandom() < current.tomActivity / 100) {
       const rotation = nextRandom() < 0.5 ? 12 : 13;
       euclideanSteps(current.tomPulses, 4, rotation % 4).forEach((step) => toms.add(step + 12));
     }
-    technoPatternRef.current = { kicks, hats, snares, ghostSnares, toms, hatChance: 0.48 + (current.hatDensity / 100) * 0.46 };
+    const glitches: GlitchHit[] = [];
+    if (isGlitch) {
+      const candidates = [1, 2, 5, 6, 9, 10, 13, 14, 15];
+      const burstCount = 4 + Math.floor(nextRandom() * 3);
+      for (let index = 0; index < burstCount; index += 1) {
+        const step = candidates[Math.floor(nextRandom() * candidates.length)];
+        const kind = nextRandom() < 0.62 ? 'hat' : nextRandom() < 0.95 ? 'snare' : 'kick';
+        const spacing = 8 + Math.floor(nextRandom() * 11);
+        const hitCount = kind === 'hat' ? 2 + Math.floor(nextRandom() * 3) : 2 + Math.floor(nextRandom() * 2);
+        glitches.push({ step, kind, offsets: Array.from({ length: hitCount }, (_, offset) => (offset + 1) * spacing), level: kind === 'hat' ? 0.42 : 0.34 });
+      }
+    }
+    technoPatternRef.current = { kicks, hats, rides, snares, ghostSnares, toms, glitches, hatChance: 0.48 + (current.hatDensity / 100) * 0.46 };
     setTechnoEvolution((count) => count + 1);
   }, [nextRandom]);
 
-  const playTechnoKick = useCallback((graph: Graph) => {
-    const now = graph.context.currentTime;
+  const playTechnoKick = useCallback((graph: Graph, lateMs = 0, level = 1) => {
+    const now = graph.context.currentTime + lateMs * 0.001;
+    const kick = technoSettingsRef.current;
     const osc = graph.context.createOscillator();
     const gain = graph.context.createGain();
     osc.type = 'sine';
     osc.frequency.setValueAtTime(150, now);
     osc.frequency.exponentialRampToValueAtTime(47, now + 0.12);
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.82, now + 0.004);
+    gain.gain.exponentialRampToValueAtTime(0.82 * level, now + 0.004);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.29);
     osc.connect(gain); gain.connect(graph.technoGain);
     osc.start(now); osc.stop(now + 0.32);
-    triggerMelodyDuck(graph);
-    triggerSynthDuck(graph);
-    triggerAfterimage(graph);
+    if (kick.cutKickEnabled) {
+      // A very short upper-kick layer adds knock and a small click above the
+      // fundamental, so the kick stays readable through dense synths and bass.
+      const cutOscillator = graph.context.createOscillator();
+      const cutGain = graph.context.createGain();
+      const cutFilter = graph.context.createBiquadFilter();
+      const cutPeak = (0.08 + kick.cutKickLevel / 100 * 0.22) * level;
+      cutOscillator.type = 'sine';
+      cutOscillator.frequency.setValueAtTime(168, now);
+      cutOscillator.frequency.exponentialRampToValueAtTime(76, now + 0.055);
+      cutFilter.type = 'bandpass'; cutFilter.frequency.value = 1260; cutFilter.Q.value = 0.8;
+      cutGain.gain.setValueAtTime(0.0001, now);
+      cutGain.gain.exponentialRampToValueAtTime(cutPeak, now + 0.002);
+      cutGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.105);
+      cutOscillator.connect(cutFilter); cutFilter.connect(cutGain); cutGain.connect(graph.technoGain);
+      cutOscillator.start(now); cutOscillator.stop(now + 0.12);
+      const click = graph.context.createBufferSource();
+      const clickBuffer = graph.context.createBuffer(1, Math.ceil(graph.context.sampleRate * 0.018), graph.context.sampleRate);
+      const clickData = clickBuffer.getChannelData(0);
+      for (let index = 0; index < clickData.length; index += 1) clickData[index] = (Math.random() * 2 - 1) * (1 - index / clickData.length);
+      const clickFilter = graph.context.createBiquadFilter();
+      const clickGain = graph.context.createGain();
+      click.buffer = clickBuffer; clickFilter.type = 'highpass'; clickFilter.frequency.value = 2800;
+      clickGain.gain.setValueAtTime(0.0001, now);
+      clickGain.gain.exponentialRampToValueAtTime(cutPeak * 0.19, now + 0.001);
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.022);
+      click.connect(clickFilter); clickFilter.connect(clickGain); clickGain.connect(graph.technoGain);
+      click.start(now); click.stop(now + 0.03);
+      click.onended = () => { try { click.disconnect(); clickFilter.disconnect(); clickGain.disconnect(); cutOscillator.disconnect(); cutFilter.disconnect(); cutGain.disconnect(); } catch {} };
+    }
+    // Tiny repeat hits colour the break but should not repeatedly punch holes
+    // in the entire synth mix or retrigger the ritual layer.
+    if (level >= 0.55) {
+      triggerMelodyDuck(graph);
+      triggerSynthDuck(graph);
+      triggerAfterimage(graph);
+    }
   }, [triggerAfterimage, triggerMelodyDuck, triggerSynthDuck]);
 
-  const playTechnoNoise = useCallback((graph: Graph, kind: 'hat' | 'snare', humanize = 0, lateMs = 0) => {
+  const playTechnoNoise = useCallback((graph: Graph, kind: 'hat' | 'snare', humanize = 0, lateMs = 0, level = 1) => {
     const now = graph.context.currentTime + lateMs * 0.001 + (nextRandom() - 0.5) * humanize * 0.001;
     const duration = kind === 'hat' ? 0.07 : 0.16;
     const source = graph.context.createBufferSource();
@@ -2000,9 +2423,13 @@ export default function DroneEnginePage() {
     const filter = graph.context.createBiquadFilter();
     const gain = graph.context.createGain();
     filter.type = kind === 'hat' ? 'highpass' : 'bandpass';
-    filter.frequency.value = kind === 'hat' ? 7200 : 1700;
+    const repeatHit = level < 0.7;
+    source.playbackRate.value = repeatHit ? 0.62 + nextRandom() * 1.16 : 1;
+    filter.frequency.value = kind === 'hat'
+      ? 7200 + (repeatHit ? (nextRandom() - 0.5) * 2200 : 0)
+      : 1700 + (repeatHit ? (nextRandom() - 0.5) * 720 : 0);
     filter.Q.value = kind === 'hat' ? 0.9 : 0.7;
-    const peak = kind === 'hat' ? 0.10 + nextRandom() * 0.09 : 0.20 + nextRandom() * 0.12;
+    const peak = (kind === 'hat' ? 0.10 + nextRandom() * 0.09 : 0.20 + nextRandom() * 0.12) * level;
     gain.gain.setValueAtTime(0.0001, now);
     gain.gain.exponentialRampToValueAtTime(peak, now + 0.002);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
@@ -2010,57 +2437,184 @@ export default function DroneEnginePage() {
     source.start(now); source.stop(now + duration + 0.01);
   }, [nextRandom]);
 
+  const playTechnoRide = useCallback((graph: Graph, humanize = 0, lateMs = 0) => {
+    const ride = technoSettingsRef.current;
+    const now = graph.context.currentTime + lateMs * 0.001 + (nextRandom() - 0.5) * humanize * 0.001;
+    const duration = 0.18 + ride.rideDecay / 100 * 0.58;
+    const source = graph.context.createBufferSource();
+    const buffer = graph.context.createBuffer(1, Math.ceil(graph.context.sampleRate * duration), graph.context.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let index = 0; index < data.length; index += 1) data[index] = (Math.random() * 2 - 1) * (1 - index / data.length * 0.3);
+    source.buffer = buffer;
+    const highpass = graph.context.createBiquadFilter();
+    const bell = graph.context.createBiquadFilter();
+    const gain = graph.context.createGain();
+    highpass.type = 'highpass'; highpass.frequency.value = 3700 + ride.rideTone * 56; highpass.Q.value = 0.55;
+    bell.type = 'peaking'; bell.frequency.value = 6100 + ride.rideTone * 42; bell.Q.value = 1.25; bell.gain.value = 4.5;
+    const peak = 0.025 + ride.rideLevel / 100 * 0.11;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    source.connect(highpass); highpass.connect(bell); bell.connect(gain); gain.connect(graph.technoGain);
+    // A pair of very quiet inharmonic partials gives the noise tail a metallic
+    // ride character without competing with the short closed hats.
+    const partials = [4810, 6580].map((frequency) => {
+      const oscillator = graph.context.createOscillator();
+      const partialGain = graph.context.createGain();
+      oscillator.type = 'sine'; oscillator.frequency.value = frequency + (nextRandom() - 0.5) * 90;
+      partialGain.gain.setValueAtTime(0.0001, now);
+      partialGain.gain.exponentialRampToValueAtTime(peak * 0.18, now + 0.003);
+      partialGain.gain.exponentialRampToValueAtTime(0.0001, now + duration * 0.78);
+      oscillator.connect(partialGain); partialGain.connect(highpass);
+      oscillator.start(now); oscillator.stop(now + duration + 0.02);
+      return { oscillator, partialGain };
+    });
+    source.start(now); source.stop(now + duration + 0.02);
+    source.onended = () => { try { source.disconnect(); highpass.disconnect(); bell.disconnect(); gain.disconnect(); partials.forEach(({ oscillator, partialGain }) => { oscillator.disconnect(); partialGain.disconnect(); }); } catch {} };
+  }, [nextRandom]);
+
   const playTechnoTom = useCallback((graph: Graph, step: number, humanize = 0, lateMs = 0) => {
     const now = graph.context.currentTime + lateMs * 0.001 + (nextRandom() - 0.5) * humanize * 0.001;
     const osc = graph.context.createOscillator();
+    const filter = graph.context.createBiquadFilter();
     const gain = graph.context.createGain();
-    const frequencies = [176, 146, 122, 104];
+    // Keep fills below the snare and give them a quick, damped body. The old
+    // bright long sine was read as an intrusive alarm rather than a tom.
+    const frequencies = [82, 92, 104, 116];
     const frequency = frequencies[(step + Math.floor(nextRandom() * frequencies.length)) % frequencies.length];
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(frequency * 1.6, now);
-    osc.frequency.exponentialRampToValueAtTime(frequency, now + 0.18);
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(frequency * 1.38, now);
+    osc.frequency.exponentialRampToValueAtTime(frequency, now + 0.075);
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(920, now);
+    filter.frequency.exponentialRampToValueAtTime(260, now + 0.18);
+    filter.Q.value = 0.6;
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.17, now + 0.008);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.34);
-    osc.connect(gain); gain.connect(graph.technoGain);
-    osc.start(now); osc.stop(now + 0.38);
+    gain.gain.exponentialRampToValueAtTime(0.075, now + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.018, now + 0.075);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.19);
+    osc.connect(filter); filter.connect(gain); gain.connect(graph.technoGain);
+    osc.start(now); osc.stop(now + 0.21);
+    osc.onended = () => { try { osc.disconnect(); filter.disconnect(); gain.disconnect(); } catch {} };
   }, [nextRandom]);
 
-  // An independent, scale-locked acid voice: it lives beside the existing
-  // constrained melody rather than replacing it, and only answers active
-  // steps in the dedicated acid lane.
+  // One deliberately opinionated dub-acid voice: a nasal saw/square core,
+  // weight from a filtered sub, and two dark tempo-synced echo taps. Sparse
+  // patterns let the delay answer the phrase instead of smearing every step.
   const playAcidStep = useCallback((graph: Graph, step: number, lateMs = 0) => {
     const acid = acidSettingsRef.current;
     if (!acid.enabled || !acid.steps[step]) return;
     const now = graph.context.currentTime + lateMs * 0.001;
     const scale = droneScales[settingsRef.current.scale].intervals;
-    const phrase = [0, 2, 1, 4, 3, 1, 5, 2, 0, 3, 6, 2, 4, 1, 5, 3];
-    const degree = phrase[step] % scale.length;
+    const degree = acid.degrees[step] % scale.length;
     const frequency = freqForSemitone(melodySettingsRef.current.root + scale[degree] + acid.octave * 12);
     const accent = acid.accents[step];
-    const duration = Math.min(0.34, 60 / technoSettingsRef.current.bpm * 0.72);
-    const oscillator = graph.context.createOscillator();
+    const slide = acid.slides[step];
+    const sixteenth = 60 / technoSettingsRef.current.bpm / 4;
+    const duration = Math.min(0.58, sixteenth * (slide ? 2.75 : accent ? 1.85 : 1.42));
     const filter = graph.context.createBiquadFilter();
     const drive = graph.context.createWaveShaper();
     const gain = graph.context.createGain();
-    oscillator.type = 'sawtooth';
-    oscillator.frequency.setValueAtTime(acidLastFrequencyRef.current ?? frequency, now);
-    oscillator.frequency.exponentialRampToValueAtTime(frequency, now + Math.min(0.075, duration * 0.45));
+    const startFrequency = acidLastFrequencyRef.current ?? frequency;
+    const oscillators: Array<{ oscillator: OscillatorNode; level: GainNode }> = [];
+    const addPartial = (type: OscillatorType, multiple: number, level: number, detune = 0) => {
+      const oscillator = graph.context.createOscillator();
+      const partialGain = graph.context.createGain();
+      oscillator.type = type;
+      oscillator.detune.value = detune;
+      const from = (slide ? startFrequency : frequency) * multiple;
+      oscillator.frequency.setValueAtTime(from, now);
+      if (slide) oscillator.frequency.exponentialRampToValueAtTime(frequency * multiple, now + Math.min(0.12, Math.max(0.025, sixteenth * 0.85)));
+      partialGain.gain.value = level;
+      oscillator.connect(partialGain); partialGain.connect(filter);
+      oscillator.start(now); oscillator.stop(now + duration + 0.04);
+      oscillators.push({ oscillator, level: partialGain });
+    };
+
+    addPartial('sawtooth', 1, 0.7);
+    addPartial('square', 1, 0.13 + acid.drive / 100 * 0.07, -7);
+    addPartial('sine', 0.5, 0.08 + acid.body / 100 * 0.34);
     acidLastFrequencyRef.current = frequency;
     filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(190 + acid.cutoff * 68 + (accent ? 1050 : 0), now);
-    filter.frequency.exponentialRampToValueAtTime(130 + acid.cutoff * 24, now + duration);
-    filter.Q.value = 1 + acid.resonance * 0.22;
-    drive.curve = createDriveCurve(acid.drive / 100 * 0.24);
+    const baseCutoff = 130 + acid.cutoff * 23;
+    const filterPeak = Math.min(9200, baseCutoff + 480 + acid.resonance * 16 + acid.accent * 7 + (accent ? 1450 : 0));
+    filter.frequency.setValueAtTime(baseCutoff, now);
+    filter.frequency.exponentialRampToValueAtTime(filterPeak, now + 0.009);
+    filter.frequency.exponentialRampToValueAtTime(110 + acid.cutoff * 8, now + duration);
+    filter.Q.value = 4.2 + acid.resonance * 0.19;
+    drive.curve = createDriveCurve(0.045 + acid.drive / 100 * 0.29);
     drive.oversample = '2x';
-    const peak = 0.09 + acid.accent / 100 * 0.09 + (accent ? 0.075 : 0);
+    const peak = 0.082 + acid.body / 100 * 0.026 + acid.accent / 100 * 0.035 + (accent ? 0.05 : 0);
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(peak, now + 0.004);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.003);
+    gain.gain.exponentialRampToValueAtTime(peak * (slide ? 0.62 : 0.31), now + duration * 0.46);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-    oscillator.connect(filter); filter.connect(drive); drive.connect(gain); gain.connect(graph.mixerChannels.acid.input);
-    oscillator.start(now); oscillator.stop(now + duration + 0.025);
-    oscillator.onended = () => { try { oscillator.disconnect(); filter.disconnect(); drive.disconnect(); gain.disconnect(); } catch {} };
+    filter.connect(drive); drive.connect(gain); gain.connect(graph.mixerChannels.acid.input);
+
+    const echoTime = Math.min(0.72, sixteenth * 3);
+    const echoAmount = acid.echo / 100;
+    const echoSend = graph.context.createGain();
+    const echoOne = graph.context.createDelay(2);
+    const echoTwo = graph.context.createDelay(2);
+    const echoFilter = graph.context.createBiquadFilter();
+    const echoOneGain = graph.context.createGain();
+    const echoTwoGain = graph.context.createGain();
+    echoSend.gain.value = echoAmount * 0.52;
+    echoOne.delayTime.value = echoTime;
+    echoTwo.delayTime.value = echoTime;
+    echoFilter.type = 'lowpass';
+    echoFilter.frequency.value = 720 + acid.cutoff * 14;
+    echoFilter.Q.value = 0.72;
+    echoOneGain.gain.value = 0.46;
+    echoTwoGain.gain.value = 0.24;
+    gain.connect(echoSend); echoSend.connect(echoOne); echoOne.connect(echoFilter);
+    echoFilter.connect(echoOneGain); echoOneGain.connect(graph.mixerChannels.acid.input);
+    echoFilter.connect(echoTwo); echoTwo.connect(echoTwoGain); echoTwoGain.connect(graph.mixerChannels.acid.input);
+
+    window.setTimeout(() => {
+      try {
+        oscillators.forEach(({ oscillator, level }) => { oscillator.disconnect(); level.disconnect(); });
+        filter.disconnect(); drive.disconnect(); gain.disconnect(); echoSend.disconnect(); echoOne.disconnect(); echoTwo.disconnect(); echoFilter.disconnect(); echoOneGain.disconnect(); echoTwoGain.disconnect();
+      } catch {}
+    }, (duration + echoTime * 2 + 0.24) * 1000);
   }, []);
+
+  const evolveAcidPhrase = useCallback(() => {
+    const source = acidSettingsRef.current;
+    const activeSteps = source.steps.flatMap((active, step) => active ? [step] : []);
+    if (activeSteps.length < 2) return;
+    const scaleLength = droneScales[settingsRef.current.scale].intervals.length;
+    const degrees = [...source.degrees];
+    const accents = [...source.accents];
+    const slides = [...source.slides];
+    const mutationCount = nextRandom() < 0.78 ? 1 : 2;
+    const changed = new Set<number>();
+    const melodicMoves = [-2, -1, 1, 2];
+
+    for (let mutation = 0; mutation < mutationCount; mutation += 1) {
+      let step = activeSteps[Math.floor(nextRandom() * activeSteps.length)];
+      while (changed.has(step) && changed.size < activeSteps.length) step = activeSteps[Math.floor(nextRandom() * activeSteps.length)];
+      changed.add(step);
+      const move = melodicMoves[Math.floor(nextRandom() * melodicMoves.length)];
+      degrees[step] = (degrees[step] + move + scaleLength) % scaleLength;
+    }
+
+    // Accents and ties move less frequently than pitch, preserving the deep
+    // dub pocket while letting a new note occasionally lean into the filter.
+    if (nextRandom() < 0.38) {
+      activeSteps.forEach((step) => { accents[step] = false; });
+      accents[activeSteps[Math.floor(nextRandom() * activeSteps.length)]] = true;
+    }
+    if (nextRandom() < 0.3) {
+      const step = activeSteps[Math.floor(nextRandom() * activeSteps.length)];
+      slides[step] = !slides[step];
+    }
+
+    const next = { ...source, degrees, accents, slides };
+    acidSettingsRef.current = next;
+    setAcidSettings(next);
+    setAcidEvolution((count) => count + 1);
+  }, [nextRandom]);
 
   const scheduleTechnoStep = useCallback(() => {
     const graph = graphRef.current;
@@ -2070,6 +2624,7 @@ export default function DroneEnginePage() {
       const bar = technoBarRef.current;
       if (bar > 0 && bar % technoSettingsRef.current.evolveBars === 0) evolveTechnoPattern();
       if (melodySettingsRef.current.enabled && bar % melodySettingsRef.current.evolveBars === 0) evolveMelodyPhrase(bar > 0);
+      if (acidSettingsRef.current.enabled && bar > 0 && bar % acidSettingsRef.current.evolveBars === 0) evolveAcidPhrase();
       const composition = melodyCompositionRef.current;
       if (melodySettingsRef.current.composerEnabled && composition?.bars.length) {
         const activeBar = bar % composition.bars.length;
@@ -2087,7 +2642,14 @@ export default function DroneEnginePage() {
     if (pattern.snares.has(step) || (punch && live.snares[step])) playTechnoNoise(graph, 'snare', humanize, swingOffset);
     if (pattern.ghostSnares.has(step) && nextRandom() < 0.68) playTechnoNoise(graph, 'snare', humanize, swingOffset);
     if ((pattern.hats.has(step) && nextRandom() < pattern.hatChance) || (punch && live.hats[step])) playTechnoNoise(graph, 'hat', humanize, swingOffset);
+    if ((pattern.rides.has(step) && nextRandom() < technoSettingsRef.current.rideChance / 100) || (punch && live.rides[step])) playTechnoRide(graph, humanize, swingOffset);
     if (pattern.toms.has(step) || (punch && live.toms[step])) playTechnoTom(graph, step, humanize, swingOffset);
+    pattern.glitches.filter((glitch) => glitch.step === step).forEach((glitch) => {
+      glitch.offsets.forEach((offset) => {
+        if (glitch.kind === 'kick') playTechnoKick(graph, swingOffset + offset, glitch.level);
+        else playTechnoNoise(graph, glitch.kind, 0, swingOffset + offset, glitch.level);
+      });
+    });
     applyMelodyTranceGate(graph, step);
     if (melodySettingsRef.current.enabled && melodySettingsRef.current.composerEnabled) {
       const composedNote = melodyCompositionRef.current?.bars[melodyActiveBarRef.current]?.steps[step] ?? null;
@@ -2099,7 +2661,7 @@ export default function DroneEnginePage() {
     playAcidStep(graph, step, swingOffset);
     technoStepRef.current += 1;
     technoTimerRef.current = window.setTimeout(() => scheduleTechnoStepRef.current(), (60 / technoSettingsRef.current.bpm / 4) * 1000);
-  }, [applyMelodyTranceGate, evolveMelodyPhrase, evolveTechnoPattern, nextRandom, playAcidStep, playScaleLockedMelody, playTechnoKick, playTechnoNoise, playTechnoTom]);
+  }, [applyMelodyTranceGate, evolveAcidPhrase, evolveMelodyPhrase, evolveTechnoPattern, nextRandom, playAcidStep, playScaleLockedMelody, playTechnoKick, playTechnoNoise, playTechnoRide, playTechnoTom]);
 
   useEffect(() => { scheduleTechnoStepRef.current = scheduleTechnoStep; }, [scheduleTechnoStep]);
   useEffect(() => {
@@ -2146,11 +2708,13 @@ export default function DroneEnginePage() {
 
   const applyTechnoPreset = useCallback((preset: TechnoPresetName) => {
     const presets: Record<typeof preset, Partial<TechnoSettings>> = {
-      classic: { bpm: 132, hatPulses: 8, snarePulses: 1, tomPulses: 1, hatDensity: 64, snareDensity: 18, tomActivity: 20, evolveBars: 8, humanize: 7, swing: 0, kickMode: 'four' },
-      detroit: { bpm: 128, hatPulses: 9, snarePulses: 2, tomPulses: 1, hatDensity: 72, snareDensity: 45, tomActivity: 25, evolveBars: 6, humanize: 11, swing: 28, kickMode: 'four' },
-      hardgroove: { bpm: 136, hatPulses: 12, snarePulses: 1, tomPulses: 3, hatDensity: 84, snareDensity: 24, tomActivity: 72, evolveBars: 4, humanize: 9, swing: 8, kickMode: 'four' },
-      rumble: { bpm: 132, hatPulses: 5, snarePulses: 1, tomPulses: 1, hatDensity: 52, snareDensity: 12, tomActivity: 14, evolveBars: 12, humanize: 4, swing: 0, kickMode: 'four' },
-      broken: { bpm: 136, hatPulses: 10, snarePulses: 3, tomPulses: 2, hatDensity: 76, snareDensity: 34, tomActivity: 42, evolveBars: 4, humanize: 12, swing: 16, kickMode: 'broken' },
+      dub: { bpm: 128, hatPulses: 7, snarePulses: 1, tomPulses: 1, cutKickEnabled: false, cutKickLevel: 42, rideEnabled: false, ridePulses: 2, rideChance: 24, rideDecay: 58, rideTone: 42, rideLevel: 24, hatDensity: 62, snareDensity: 16, tomActivity: 9, evolveBars: 12, humanize: 6, swing: 13, kickMode: 'four' },
+      glitch: { bpm: 156, hatPulses: 13, snarePulses: 3, tomPulses: 2, cutKickEnabled: true, cutKickLevel: 58, rideEnabled: true, ridePulses: 5, rideChance: 54, rideDecay: 34, rideTone: 78, rideLevel: 29, hatDensity: 91, snareDensity: 68, tomActivity: 18, evolveBars: 2, humanize: 4, swing: 4, kickMode: 'glitch' },
+      classic: { bpm: 132, hatPulses: 8, snarePulses: 1, tomPulses: 1, cutKickEnabled: false, cutKickLevel: 46, rideEnabled: true, ridePulses: 4, rideChance: 68, rideDecay: 45, rideTone: 56, rideLevel: 36, hatDensity: 64, snareDensity: 18, tomActivity: 20, evolveBars: 8, humanize: 7, swing: 0, kickMode: 'four' },
+      detroit: { bpm: 128, hatPulses: 9, snarePulses: 2, tomPulses: 1, cutKickEnabled: false, cutKickLevel: 42, rideEnabled: true, ridePulses: 3, rideChance: 54, rideDecay: 62, rideTone: 48, rideLevel: 32, hatDensity: 72, snareDensity: 45, tomActivity: 25, evolveBars: 6, humanize: 11, swing: 28, kickMode: 'four' },
+      hardgroove: { bpm: 136, hatPulses: 12, snarePulses: 1, tomPulses: 3, cutKickEnabled: true, cutKickLevel: 68, rideEnabled: true, ridePulses: 8, rideChance: 82, rideDecay: 54, rideTone: 68, rideLevel: 52, hatDensity: 84, snareDensity: 24, tomActivity: 72, evolveBars: 4, humanize: 9, swing: 8, kickMode: 'four' },
+      rumble: { bpm: 132, hatPulses: 5, snarePulses: 1, tomPulses: 1, cutKickEnabled: true, cutKickLevel: 54, rideEnabled: false, ridePulses: 0, rideChance: 0, rideDecay: 44, rideTone: 46, rideLevel: 28, hatDensity: 52, snareDensity: 12, tomActivity: 14, evolveBars: 12, humanize: 4, swing: 0, kickMode: 'four' },
+      broken: { bpm: 136, hatPulses: 10, snarePulses: 3, tomPulses: 2, cutKickEnabled: true, cutKickLevel: 62, rideEnabled: true, ridePulses: 5, rideChance: 66, rideDecay: 58, rideTone: 64, rideLevel: 44, hatDensity: 76, snareDensity: 34, tomActivity: 42, evolveBars: 4, humanize: 12, swing: 16, kickMode: 'broken' },
     };
     const next = { ...technoSettingsRef.current, ...presets[preset] };
     technoSettingsRef.current = next;
@@ -2166,13 +2730,21 @@ export default function DroneEnginePage() {
       hatPulses: 5 + Math.floor(nextRandom() * 10),
       snarePulses: 1 + Math.floor(nextRandom() * 3),
       tomPulses: Math.floor(nextRandom() * 5),
+      cutKickEnabled: nextRandom() > 0.5,
+      cutKickLevel: 36 + Math.floor(nextRandom() * 56),
+      rideEnabled: nextRandom() > 0.16,
+      ridePulses: 2 + Math.floor(nextRandom() * 7),
+      rideChance: 44 + Math.floor(nextRandom() * 52),
+      rideDecay: 34 + Math.floor(nextRandom() * 54),
+      rideTone: 40 + Math.floor(nextRandom() * 52),
+      rideLevel: 26 + Math.floor(nextRandom() * 48),
       hatDensity: 45 + Math.floor(nextRandom() * 51),
       snareDensity: Math.floor(nextRandom() * 56),
       tomActivity: Math.floor(nextRandom() * 66),
       evolveBars: 2 + Math.floor(nextRandom() * 11),
       humanize: 3 + Math.floor(nextRandom() * 16),
       swing: Math.floor(nextRandom() * 35),
-      kickMode: nextRandom() < 0.22 ? 'broken' : 'four',
+      kickMode: nextRandom() < 0.34 ? 'glitch' : nextRandom() < 0.5 ? 'broken' : 'four',
     };
     technoSettingsRef.current = next;
     setTechnoSettings(next);
@@ -2280,16 +2852,20 @@ export default function DroneEnginePage() {
 
   // ── Keyboard Play: soft, scale-locked notes triggered by hand ────
 
-  const playKey = useCallback(async (key: string) => {
-    const mapping = keyboardKeyMap[key];
-    if (!mapping || keyVoicesRef.current.has(key)) return;
+  const playScaleVoice = useCallback(async (voiceKey: string, degrees: number[], octaveOffset: number) => {
+    if (exportBlockingRef.current || keyVoicesRef.current.has(voiceKey)) return;
     const graph = await ensureAudio();
+    if (exportBlockingRef.current) return;
     const current = settingsRef.current;
     const scale = droneScales[current.scale].intervals;
     const baseMidi = Math.round(12 * Math.log2(current.basePitch / 16.351));
-    const octaveJump = Math.floor(mapping.degreeIndex / scale.length);
-    const semitone = scale[mapping.degreeIndex % scale.length] + octaveJump * 12;
-    const frequency = freqForSemitone(baseMidi + semitone + mapping.octaveOffset + keyboardTranspose);
+    const frequencyForDegree = (degree: number) => {
+      const shiftedDegree = degree + keyboardTranspose;
+      const scaleIndex = ((shiftedDegree % scale.length) + scale.length) % scale.length;
+      const octaveJump = Math.floor(shiftedDegree / scale.length);
+      return freqForSemitone(baseMidi + scale[scaleIndex] + octaveJump * 12 + octaveOffset);
+    };
+    const frequencies = degrees.map(frequencyForDegree);
     const now = graph.context.currentTime;
 
     const filter = graph.context.createBiquadFilter();
@@ -2297,46 +2873,60 @@ export default function DroneEnginePage() {
     filter.frequency.value = 2800;
     filter.Q.value = 0.8;
     const panner = graph.context.createStereoPanner();
-    panner.pan.value = (nextRandom() * 2 - 1) * 0.3;
+    panner.pan.value = frequencies.length > 1 ? 0 : (nextRandom() * 2 - 1) * 0.3;
     const gain = graph.context.createGain();
     gain.gain.setValueAtTime(0.0001, now);
-    // Bring the hand-played notes forward again: a quick, click-free attack
-    // and a fuller level make each key feel immediate above the drone.
-    gain.gain.exponentialRampToValueAtTime(0.34, now + 0.025);
+    // Chords sit slightly behind the melody, leaving room to play both hands.
+    gain.gain.exponentialRampToValueAtTime(frequencies.length > 1 ? 0.22 : 0.34, now + 0.025);
 
     const oscillators: OscillatorNode[] = [];
-    for (const detune of [-6, 6]) {
-      const osc = graph.context.createOscillator();
-      const oscGain = graph.context.createGain();
-      osc.type = current.waveform;
-      osc.frequency.value = frequency;
-      osc.detune.value = detune;
-      oscGain.gain.value = 0.72;
-      osc.connect(oscGain); oscGain.connect(filter); osc.start();
-      oscillators.push(osc);
-    }
-    if (keyboardShine > 0) {
-      const shineOsc = graph.context.createOscillator();
-      const shineGain = graph.context.createGain();
-      shineOsc.type = 'sine';
-      shineOsc.frequency.value = frequency * 2;
-      shineGain.gain.value = keyboardShine / 100 * 0.18;
-      shineOsc.connect(shineGain); shineGain.connect(filter); shineOsc.start();
-      oscillators.push(shineOsc);
-    }
+    frequencies.forEach((frequency) => {
+      for (const detune of [-6, 6]) {
+        const osc = graph.context.createOscillator();
+        const oscGain = graph.context.createGain();
+        osc.type = current.waveform;
+        osc.frequency.value = frequency;
+        osc.detune.value = detune;
+        oscGain.gain.value = 0.72 / frequencies.length;
+        osc.connect(oscGain); oscGain.connect(filter); osc.start();
+        oscillators.push(osc);
+      }
+      if (keyboardShine > 0) {
+        const shineOsc = graph.context.createOscillator();
+        const shineGain = graph.context.createGain();
+        shineOsc.type = 'sine';
+        shineOsc.frequency.value = frequency * 2;
+        shineGain.gain.value = keyboardShine / 100 * 0.18 / frequencies.length;
+        shineOsc.connect(shineGain); shineGain.connect(filter); shineOsc.start();
+        oscillators.push(shineOsc);
+      }
+    });
     const subOsc = graph.context.createOscillator();
     const subGain = graph.context.createGain();
     subOsc.type = 'sine';
-    subOsc.frequency.value = frequency / 2;
-    subGain.gain.value = 0.36;
+    subOsc.frequency.value = frequencies[0] / 2;
+    subGain.gain.value = frequencies.length > 1 ? 0.15 : 0.36;
     subOsc.connect(subGain); subGain.connect(filter); subOsc.start();
 
     filter.connect(gain); gain.connect(panner);
     panner.connect(graph.mixerChannels.drone.input);
 
-    keyVoicesRef.current.set(key, { oscillators, subOsc, gain, filter, panner });
-    setActiveKeys((previous) => ({ ...previous, [key]: true }));
+    keyVoicesRef.current.set(voiceKey, { oscillators, subOsc, gain, filter, panner });
+    setActiveKeys((previous) => ({ ...previous, [voiceKey]: true }));
   }, [ensureAudio, keyboardShine, keyboardTranspose, nextRandom]);
+
+  const playKey = useCallback((key: string) => {
+    const mapping = keyboardKeyMap[key];
+    if (!mapping) return;
+    return playScaleVoice(key, [mapping.degreeIndex], mapping.octaveOffset);
+  }, [playScaleVoice]);
+
+  const playChord = useCallback((key: string) => {
+    const rootDegree = chordKeyMap[key];
+    if (rootDegree === undefined) return;
+    const chordDegrees = chordVoicing === 'seventh' ? [rootDegree, rootDegree + 2, rootDegree + 4, rootDegree + 6] : [rootDegree, rootDegree + 2, rootDegree + 4];
+    return playScaleVoice(`chord-${key}`, chordDegrees, 0);
+  }, [chordVoicing, playScaleVoice]);
 
   const releaseKey = useCallback((key: string) => {
     const graph = graphRef.current;
@@ -2360,8 +2950,9 @@ export default function DroneEnginePage() {
   // notes, but retain their own identities so note-off messages can release
   // exactly the voice that the DAW started (including per-channel notes).
   const playMidiNote = useCallback(async (voiceKey: string, note: number, velocity: number) => {
-    if (midiVoicesRef.current.has(voiceKey)) return;
+    if (exportBlockingRef.current || midiVoicesRef.current.has(voiceKey)) return;
     const graph = await ensureAudio();
+    if (exportBlockingRef.current) return;
     const current = settingsRef.current;
     const now = graph.context.currentTime;
     const filter = graph.context.createBiquadFilter();
@@ -2459,6 +3050,7 @@ export default function DroneEnginePage() {
     let unlistenMessage: (() => void) | undefined;
     let unlistenStatus: (() => void) | undefined;
     void listen<MidiMessage>('midi-message', ({ payload }) => {
+      if (exportBlockingRef.current && payload.messageType !== 'noteOff') return;
       if (payload.messageType === 'clock' && midiClockSyncRef.current) {
         const now = performance.now();
         const clock = midiClockRef.current;
@@ -2498,16 +3090,19 @@ export default function DroneEnginePage() {
   useEffect(() => {
     if (!keyboardPlayOn) return;
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (exportBlockingRef.current) return;
       if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
       const key = event.key.toLowerCase();
-      if (!keyboardKeyMap[key]) return;
+      if (!keyboardKeyMap[key] && chordKeyMap[key] === undefined) return;
       event.preventDefault();
-      void playKey(key);
+      if (keyboardKeyMap[key]) void playKey(key);
+      else void playChord(key);
     };
     const handleKeyUp = (event: KeyboardEvent) => {
-      releaseKey(event.key.toLowerCase());
+      const key = event.key.toLowerCase();
+      releaseKey(keyboardKeyMap[key] ? key : `chord-${key}`);
     };
     const releaseAllKeys = () => {
       Array.from(keyVoicesRef.current.keys()).forEach(releaseKey);
@@ -2526,7 +3121,7 @@ export default function DroneEnginePage() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       releaseAllKeys();
     };
-  }, [keyboardPlayOn, playKey, releaseKey]);
+  }, [keyboardPlayOn, playChord, playKey, releaseKey]);
 
   useEffect(() => {
     if (!started) return;
@@ -2972,13 +3567,32 @@ export default function DroneEnginePage() {
   }, [handleSampleFile]);
 
   const status = paused ? 'Paused' : running ? 'Generating' : 'Standby';
+  const exportIsBlocking = exportState.stage === 'encoding' || exportState.stage === 'saving';
+  const exportIsVisible = exportState.stage !== 'idle';
+  const openWorkspace = (workspace: WorkspaceId) => {
+    if (exportIsBlocking) return;
+    setActiveWorkspace((current) => current === workspace && !workspacePinned ? null : workspace);
+  };
+  const closeWorkspace = () => { setActiveWorkspace(null); setWorkspacePinned(false); };
+  const controlResults = controlIndex.filter((target) => `${target.label} ${target.detail}`.toLowerCase().includes(controlQuery.trim().toLowerCase())).slice(0, 8);
+  const openControlTarget = (target: ControlTarget) => {
+    if (exportIsBlocking) return;
+    if (target.workspace === 'mix') {
+      setMixBoardOpen(true);
+    } else {
+      setActiveWorkspace(target.workspace === 'live' ? null : target.workspace);
+    }
+    setControlFinderOpen(false);
+    setControlQuery('');
+    window.setTimeout(() => document.querySelector<HTMLElement>(`[data-control-panel="${target.panel}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  };
   const gentleMasterGlue = settings.masterSaturation === 0.025 && settings.compThreshold === -12 && settings.compRatio === 2 && settings.compAttack === 0.03 && settings.compRelease === 0.25 && settings.limiterCeiling === -1;
   const performanceSources = [
     { label: 'Drone', color: 'drone', active: running && voiceCount > 0 },
     { label: 'Machine', color: 'machine', active: technoPlaying },
     { label: 'Melody', color: 'melody', active: melodySettings.enabled && technoPlaying },
     { label: 'Acid', color: 'acid', active: acidSettings.enabled },
-    { label: 'Input', color: 'input', active: sampleActive || micState === 'recording' },
+    { label: 'Input', color: 'input', active: sampleActive || micState === 'recording' || radioPlaying },
     { label: 'Pulse', color: 'pulse', active: running && pulsePattern !== 'off' },
     { label: 'Ritual', color: 'ritual', active: ritualIntensity > 0 },
   ];
@@ -2987,7 +3601,7 @@ export default function DroneEnginePage() {
     machine: technoPlaying,
     melody: melodySettings.enabled && technoPlaying,
     acid: acidSettings.enabled,
-    input: sampleActive || micState === 'recording',
+    input: sampleActive || micState === 'recording' || radioPlaying,
     pulse: running && pulsePattern !== 'off',
     ritual: ritualIntensity > 0,
     master: started && running,
@@ -3008,20 +3622,70 @@ export default function DroneEnginePage() {
       {showGuide && <div className="guide-backdrop" role="presentation" onClick={() => setShowGuide(false)}>
         <section className="guide-modal" role="dialog" aria-modal="true" aria-label="How to use Hi Drone" onClick={(event) => event.stopPropagation()}>
           <button type="button" className="guide-close" aria-label="Close guide" onClick={() => setShowGuide(false)}>×</button>
-          <h2>How to use Hi Drone</h2>
-          <p>Press <strong>Begin</strong>, start Minimal Machine, then let the drone and kick find space around each other.</p>
-          <ol>
-            <li>Raise <strong>Ritual</strong> to blend ghost tails, drum drive, granular space, bass ducking, and mutation as one gesture.</li>
-            <li>Choose a DNA material: Cavern, Metal, Dust, or Sub.</li>
-            <li>Tap the Core to mutate, hold it to absorb the last 12 seconds, or double-tap it for a Tectonic Scene shift.</li>
-            <li>Store anchors A and B inside Ritual Core to give Tectonic shifts two worlds to travel between.</li>
-            <li>Blackout activates automatically for capture and scene shifts; exit it from the header.</li>
-          </ol>
+          <h2>About Hi Drone</h2>
+          <p className="guide-intro">Hi Drone is a live generative instrument for building evolving ambient, techno, and drone performances from one connected sound world.</p>
+          <section className="guide-section">
+            <h3>Start a performance</h3>
+            <ol>
+              <li>Press <strong>Begin</strong>, start Minimal Machine, then let the drone and kick find space around each other.</li>
+              <li>Raise <strong>Ritual</strong> to blend ghost tails, drum drive, granular space, bass ducking, and mutation as one gesture.</li>
+              <li>Choose a DNA material: Cavern, Metal, Dust, or Sub. Tap the Core to mutate; hold it to absorb the recent mix.</li>
+              <li>Use the Artist Palette: <strong>Load</strong> recalls a world immediately; <strong>Conduct</strong> moves into it over the selected number of bars.</li>
+              <li>The side faders are the primary source levels. Open Mix Board for mute and detailed three-band EQ.</li>
+            </ol>
+          </section>
+          <section className="guide-rights">
+            <strong>© 2026 NiceSoftware AS. All rights reserved.</strong>
+            <p>Hi Drone, including its original visual interface, interaction design, audio-engine concepts, sound-design tools, presets, and associated materials, is the intellectual property of NiceSoftware AS.</p>
+            <p>No copying, redistribution, adaptation, commercial use, or creation of derivative products is permitted without prior written permission from NiceSoftware AS, except where applicable law requires otherwise.</p>
+          </section>
+        </section>
+      </div>}
+
+      {exportIsVisible && <div className={`export-backdrop${exportState.stage === 'complete' ? ' complete' : ''}${exportState.stage === 'error' ? ' error' : ''}`} role="presentation" onClick={() => { if (!exportIsBlocking) dismissExportState(); }}>
+        <section className="export-modal" role="dialog" aria-modal="true" aria-label={exportState.stage === 'complete' ? 'Export complete' : exportState.stage === 'error' ? 'Export failed' : 'Exporting performance'} onClick={(event) => event.stopPropagation()}>
+          <div className="export-mark" aria-hidden="true">{exportState.stage === 'complete' ? '✓' : exportState.stage === 'error' ? '!' : <span />}</div>
+          <span className="export-eyebrow">{exportState.stage === 'complete' ? 'Performance ready' : exportState.stage === 'error' ? 'Export needs attention' : 'Hi Drone is rendering'}</span>
+          <h2>{exportState.stage === 'complete' ? 'Export complete' : exportState.stage === 'error' ? 'Export failed' : 'Exporting performance'}</h2>
+          <p>{exportState.detail}</p>
+          <div className="export-progress" aria-label={`Export progress ${exportState.progress}%`}><i style={{ width: `${exportState.progress}%` }} /></div>
+          <div className="export-progress-meta"><span>{exportIsBlocking ? 'Performance controls locked' : 'Your live set is ready'}</span><strong>{exportState.progress}%</strong></div>
+          {exportIsBlocking ? <small>Audio recording has ended. Encoding and saving are protected from new synth or MIDI input.</small> : <button type="button" className="btn export-return" onClick={dismissExportState}>Return to performance</button>}
+        </section>
+      </div>}
+
+      {controlFinderOpen && !exportIsBlocking && <div className="control-finder-backdrop" role="presentation" onClick={() => setControlFinderOpen(false)}>
+        <section className="control-finder" role="dialog" aria-modal="true" aria-label="Find a control" onClick={(event) => event.stopPropagation()}>
+          <div className="control-finder-input"><span>⌕</span><input autoFocus aria-label="Search controls" placeholder="Find cutoff, MIDI, toms, limiter…" value={controlQuery} onChange={(event) => setControlQuery(event.target.value)} /><kbd>ESC</kbd></div>
+          <div className="control-finder-results">
+            {controlResults.map((target) => <button type="button" key={`${target.workspace}-${target.panel}`} onClick={() => openControlTarget(target)}><span><strong>{target.label}</strong><small>{target.detail}</small></span><i>{target.workspace === 'live' ? 'Live' : target.workspace === 'mix' ? 'Mixer' : workspaceMeta[target.workspace].shortLabel}</i></button>)}
+            {!controlResults.length && <div className="control-finder-empty">No matching control</div>}
+          </div>
+          <footer><span>Type to filter</span><span>Click to open</span><span>⌘K Toggle finder</span></footer>
         </section>
       </div>}
 
       {started ? (
-        <aside className={`floating-mixer${mixBoardOpen ? ' open' : ' folded'}`} aria-label="Floating mix board">
+        <>
+          {(['left', 'right'] as const).map((side) => (
+            <aside className={`side-mixer side-mixer-${side}`} aria-label={`${side} primary channel faders`} key={side}>
+              {sideMixerChannels[side].map((channelId) => {
+                const channel = mixerChannelMeta.find(({ id }) => id === channelId)!;
+                const mix = mixerSettings[channelId];
+                return (
+                  <label className={`side-mixer-strip${mix.muted ? ' muted' : ''}${mixerActivity[channelId] ? ' active' : ''}${channelId === 'master' ? ' master' : ''}`} style={{ '--channel-color': channel.color } as CSSProperties} key={channelId}>
+                    <span className="side-mixer-name"><i />{channel.label}</span>
+                    <strong>{Math.round(mix.volume)}</strong>
+                    <div className="side-fader-wrap">
+                      <input className="side-fader" aria-label={`${channel.label} primary volume`} type="range" min="0" max="100" step="1" value={mix.volume} onChange={(event) => updateMixerChannel(channelId, 'volume', Number(event.target.value))} />
+                      <span className="side-fader-scale" aria-hidden="true"><b>+12</b><b>0</b><b>−12</b><b>−∞</b></span>
+                    </div>
+                  </label>
+                );
+              })}
+            </aside>
+          ))}
+        <aside className={`floating-mixer${mixBoardOpen ? ' open' : ' folded'}`} aria-label="Floating mix board" data-control-panel="mix-board">
           {mixBoardOpen ? (
             <>
               <div className="mixer-head">
@@ -3045,6 +3709,7 @@ export default function DroneEnginePage() {
             </>
           ) : <button type="button" className="mixer-unfold" aria-expanded="false" onClick={() => setMixBoardOpen(true)}><span>≋</span> MIX</button>}
         </aside>
+        </>
       ) : null}
 
       {!started && (
@@ -3058,7 +3723,7 @@ export default function DroneEnginePage() {
         <div className="interface">
           <div className="visualizer-wrap">
             <div className="viz-label">Spectrum</div>
-            <div className={`viz-status${isRecording ? ' recording' : ''}`}>{isRecording ? 'Recording' : status}</div>
+            <div className={`viz-status${isRecording ? ' recording' : ''}`}>{isRecording ? 'Recording' : exportIsBlocking ? 'Exporting' : status}</div>
             <canvas ref={canvasRef} aria-label="Live drone spectrum visualizer" />
           </div>
 
@@ -3070,16 +3735,22 @@ export default function DroneEnginePage() {
             &nbsp;|&nbsp; Sample: <strong>{sampleStatus}</strong>
           </div>
 
-          <div className={`record-bar${isRecording ? ' recording' : ''}`}>
-            <button className={`btn btn-danger${isRecording ? ' recording' : ''}`} type="button" onClick={toggleRecording}>{isRecording ? 'Stop & Export' : 'Record'}</button>
+          <div className={`record-bar${isRecording ? ' recording' : ''}${exportIsBlocking ? ' exporting' : ''}`}>
+            <button className={`btn btn-danger${isRecording ? ' recording' : ''}`} type="button" disabled={exportIsBlocking} onClick={toggleRecording}>{isRecording ? 'Stop & Export' : exportIsBlocking ? 'Exporting…' : 'Record'}</button>
             <span className="record-time">{recordTime}</span>
-            <span className="record-status">{recordStatus}</span>
+            <span className="record-status">{exportIsBlocking ? exportState.detail : recordStatus}</span>
             <div style={{ flex: 1 }} />
             <span className="record-hint">Records the full mix as MP3 — synth + sample drone</span>
           </div>
 
-          <div className="controls">
-            <div className="panel panel-full">
+          {activeWorkspace && !workspacePinned && <button type="button" className="workspace-scrim" aria-label="Close editor" onClick={closeWorkspace} />}
+
+          <div className={`controls${activeWorkspace ? ` workspace-editor workspace-${activeWorkspace}${workspacePinned ? ' pinned' : ''}` : ' live-cockpit'}`}>
+            {activeWorkspace && <div className="workspace-editor-head">
+              <div><span>Editor</span><strong>{workspaceMeta[activeWorkspace].label}</strong><small>{workspaceMeta[activeWorkspace].description}</small></div>
+              <div className="btn-row"><button type="button" className={`workspace-pin${workspacePinned ? ' active' : ''}`} aria-pressed={workspacePinned} onClick={() => setWorkspacePinned((current) => !current)}>{workspacePinned ? 'Pinned' : 'Pin'}</button><button type="button" className="workspace-close" aria-label="Close editor" onClick={closeWorkspace}>×</button></div>
+            </div>}
+            <div className="panel panel-full" data-workspace="input" data-control-panel="audio-input">
               <h3>Audio Input — Feed Your Own Sound</h3>
               <div
                 className={`drop-zone${isDragging ? ' dragging' : ''}`}
@@ -3110,6 +3781,36 @@ export default function DroneEnginePage() {
                   </button>
                   <span className="mic-hint">Records up to {MIC_MAX_SECONDS}s from your mic and feeds it into the drone, same as a dropped file.</span>
                   {micError && <div className="voice-error">{micError}</div>}
+                </div>
+              )}
+
+              {!sampleLoaded && (
+                <div className="radio-sampler">
+                  <div className="radio-sampler-head">
+                    <div><strong>Open Radio Sampler</strong><span>Monitor a live station, then capture a short fragment into the granular engine.</span></div>
+                    <span className={`radio-live${radioPlaying ? ' active' : ''}`}><i />{radioPlaying ? 'On air' : 'Off air'}</span>
+                  </div>
+                  <div className="radio-search-row">
+                    <input aria-label="Search open radio directory" value={radioQuery} placeholder="Station or genre — dub, ambient…" onChange={(event) => setRadioQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchRadio(); }} />
+                    <button type="button" className="btn" disabled={radioSearching || exportIsBlocking} onClick={() => { void searchRadio(); }}>{radioSearching ? 'Searching…' : 'Find stations'}</button>
+                  </div>
+                  {!!radioResults.length && <div className="radio-results" aria-label="Radio station results">
+                    {radioResults.map((station) => <button type="button" key={station.stationuuid || station.urlResolved} className={radioPlaying && radioUrl === station.urlResolved ? 'active' : ''} onClick={() => { void startRadio(station.urlResolved, station.name); }}>
+                      <span><strong>{station.name}</strong><small>{[station.country, station.codec, station.bitrate ? `${station.bitrate} kbps` : ''].filter(Boolean).join(' · ')}</small></span><i>▶</i>
+                    </button>)}
+                  </div>}
+                  <div className="radio-url-row">
+                    <input aria-label="Custom direct radio stream URL" value={radioUrl} placeholder="Or paste a permitted direct HTTPS MP3/AAC stream URL" onChange={(event) => { setRadioUrl(event.target.value); setRadioName('Custom station'); }} />
+                    <button type="button" className="btn" disabled={!radioUrl || exportIsBlocking} onClick={() => { if (radioPlaying) stopRadio(); else void startRadio(radioUrl, radioName || 'Custom station'); }}>{radioPlaying ? 'Stop radio' : 'Monitor URL'}</button>
+                  </div>
+                  {radioPlaying && <div className="radio-capture-row">
+                    <div className="radio-capture-status"><strong>{radioName}</strong><span>{radioCaptureState === 'capturing' ? `Capturing ${radioCaptureTime.toFixed(1)} / ${radioCaptureSeconds}s` : radioCaptureState === 'processing' ? 'Building sample…' : 'Monitoring live station'}</span></div>
+                    <label><span>Capture length</span><input aria-label="Radio capture length" type="range" min="4" max={RADIO_MAX_SECONDS} step="1" disabled={radioCaptureState !== 'idle'} value={radioCaptureSeconds} onChange={(event) => setRadioCaptureSeconds(Number(event.target.value))} /><strong>{radioCaptureSeconds}s</strong></label>
+                    <button type="button" className={`btn${radioCaptureState === 'capturing' ? ' btn-danger recording' : ' btn-warm'}`} disabled={radioCaptureState !== 'idle' || exportIsBlocking} onClick={toggleRadioCapture}>{radioCaptureState === 'capturing' ? 'Capturing…' : radioCaptureState === 'processing' ? 'Processing…' : 'Capture to sampler'}</button>
+                    {radioCaptureState === 'capturing' && <div className="radio-capture-progress"><i style={{ width: `${Math.min(100, radioCaptureTime / radioCaptureSeconds * 100)}%` }} /></div>}
+                  </div>}
+                  {radioError && <div className="voice-error">{radioError}</div>}
+                  <div className="radio-rights">Directory data is provided by Radio Browser. Stations are free to discover and listen to, but broadcasts can still be copyrighted. Capture only audio you own, public-domain material, or broadcasts you have permission to sample.</div>
                 </div>
               )}
 
@@ -3223,7 +3924,7 @@ export default function DroneEnginePage() {
               {!sampleLoaded && sampleError && <div className="voice-error">{sampleError}</div>}
             </div>
 
-            <div className="panel">
+            <div className="panel" data-workspace="sound" data-control-panel="tone">
               <h3>Tone</h3>
               <div className="slider-group">
                 <div className="slider-label"><span>Base pitch</span><span>{settings.basePitch} Hz</span></div>
@@ -3247,7 +3948,7 @@ export default function DroneEnginePage() {
               </div>
             </div>
 
-            <div className="panel">
+            <div className="panel" data-workspace="sound" data-control-panel="modulation">
               <h3>Modulation</h3>
               <div className="slider-group">
                 <div className="slider-label"><span>Filter sweep speed</span><span>{formatHertz(settings.filterRate)} Hz</span></div>
@@ -3267,7 +3968,7 @@ export default function DroneEnginePage() {
               </div>
             </div>
 
-            <div className="panel">
+            <div className="panel" data-workspace="sound" data-control-panel="space">
               <h3>Space</h3>
               <div className="slider-group">
                 <div className="slider-label"><span>Reverb</span><span>{Math.round(settings.reverbAmount * 100)}%</span></div>
@@ -3287,7 +3988,7 @@ export default function DroneEnginePage() {
               </div>
             </div>
 
-            <div className="panel panel-full mastering-panel">
+            <div className="panel panel-full mastering-panel" data-workspace="studio" data-control-panel="mastering">
               <div className="performance-heading">
                 <div><h3>Mastering</h3><span>Final tone, shared movement, and safe output.</span></div>
                 <div className="master-glue-preset"><span>{gentleMasterGlue ? 'Gentle profile' : 'Custom profile'}</span><button type="button" className="btn active" onClick={applyMasterGlue}>Apply Master Glue</button></div>
@@ -3415,7 +4116,7 @@ export default function DroneEnginePage() {
               </div>
             </div>
 
-            <div className="panel panel-full">
+            <div className="panel panel-full" data-workspace="studio" data-control-panel="signal-flow">
               <h3>Semi-Modular Signal Flow</h3>
               <div className="patch-bay">
                 <svg className="patch-wires" viewBox="0 0 900 120" preserveAspectRatio="none" aria-hidden="true">
@@ -3437,7 +4138,7 @@ export default function DroneEnginePage() {
               <div className="sample-help">Click a cable to patch or unpatch it. Active cables are real: pitch shapes LFO pace, modulation depth opens the delay, and Space → Tone gently darkens the source as the room grows.</div>
             </div>
 
-            <div className="panel panel-full afterimage-panel">
+            <div className="panel panel-full afterimage-panel" data-workspace="live" data-control-panel="ritual-core">
               <div className="performance-heading">
                 <div><h3>Ritual Core</h3><span>One gesture conducts afterimage, memory, mutation, drive, ducking, and scenes.</span></div>
                 <span className="ritual-readout">{ritualIntensity}</span>
@@ -3483,7 +4184,7 @@ export default function DroneEnginePage() {
               <div className="sample-help">Ritual intensity controls the relationships underneath. Tap CORE to mutate, hold to absorb the recent mix, or double-tap for the next Tectonic anchor.</div>
             </div>
 
-            <div className="panel panel-full performance-panel">
+            <div className="panel panel-full performance-panel" data-workspace="live" data-control-panel="tectonic">
               <div className="performance-heading">
                 <div><h3>Tectonic Performance</h3><span>Guide the world without rewriting the patch.</span></div>
                 <button type="button" className={`btn freeze-btn${freezeActive ? ' active' : ''}`} disabled={!freezeActive && voiceCount === 0} onClick={() => { if (freezeActive) releaseFreeze(); else void captureFreeze(); }}>
@@ -3532,7 +4233,7 @@ export default function DroneEnginePage() {
               <div className="sample-help">These macros remain available for detailed live steering. Ritual Core conducts them automatically when its main intensity changes.</div>
             </div>
 
-            <div className="panel panel-full artist-panel">
+            <div className="panel panel-full artist-panel" data-workspace="live" data-control-panel="palette">
               <div className="performance-heading">
                 <div><h3>Performance Palette</h3><span>Five artist-inspired ways of conducting the instrument. Load is immediate; conduct arrives on the next bar.</span></div>
                 <label className="conductor-length"><span>Conductor</span><select aria-label="Conductor length" value={conductorBars} onChange={(event) => setConductorBars(Number(event.target.value))}><option value={8}>8 bars</option><option value={16}>16 bars</option><option value={32}>32 bars</option></select></label>
@@ -3550,7 +4251,7 @@ export default function DroneEnginePage() {
               {conductorTarget && <div className="conductor-status"><span>{artistScenes[conductorTarget].title} {conductorProgress ? `· ${Math.round(conductorProgress * 100)}%` : '· queued'}</span><button type="button" className="btn" onClick={stopConductor}>Cancel conductor</button></div>}
             </div>
 
-            <div className="panel panel-full performance-panel">
+            <div className="panel panel-full performance-panel" data-workspace="live" data-control-panel="decks">
               <div className="performance-heading"><div><h3>Three-Deck Performance</h3><span>Ride the groove, melodic, and atmospheric buses like a long-form mix.</span></div><div className="btn-row">{(['groove', 'melodic', 'atmosphere'] as const).map((deck) => <button key={deck} type="button" className={`btn${deckFocus === deck ? ' active' : ''}`} onClick={() => focusDeck(deck)}>{deck}</button>)}</div></div>
               <div className="deck-grid">
                 {([{ id: 'groove', label: 'Deck A · Groove' }, { id: 'melodic', label: 'Deck B · Melody' }, { id: 'atmosphere', label: 'Deck C · Atmosphere' }] as const).map((deck) => (
@@ -3559,17 +4260,19 @@ export default function DroneEnginePage() {
               </div>
             </div>
 
-            <div className="panel panel-full acid-panel">
-              <div className="performance-heading"><div><h3>Acid Pressure Lane</h3><span>Scale-locked resonance voice. It adds a lane; it never takes the existing melody away.</span></div><button type="button" className={`btn freeze-btn${acidSettings.enabled ? ' active' : ''}`} onClick={() => setAcidSettings((current) => ({ ...current, enabled: !current.enabled }))}>{acidSettings.enabled ? 'Acid On' : 'Acid Off'}</button></div>
-              <div className="step-lane"><span>Notes</span><div>{acidSettings.steps.map((active, step) => <button type="button" aria-label={`Acid note step ${step + 1}`} className={`step-button${active ? ' active' : ''}`} key={step} onClick={() => setAcidSettings((current) => ({ ...current, steps: current.steps.map((value, index) => index === step ? !value : value) }))}>{step + 1}</button>)}</div></div>
+            <div className="panel panel-full acid-panel" data-workspace="machine" data-control-panel="acid">
+              <div className="performance-heading"><div><h3>Dub Acid Machine</h3><span>Scale-locked motif · evolves every {acidSettings.evolveBars} bars · variation {acidEvolution}</span></div><div className="btn-row"><button type="button" className="btn" onClick={evolveAcidPhrase}>Evolve</button><button type="button" className={`btn freeze-btn${acidSettings.enabled ? ' active' : ''}`} onClick={() => setAcidSettings((current) => ({ ...current, enabled: !current.enabled }))}>{acidSettings.enabled ? 'Acid On' : 'Acid Off'}</button></div></div>
+              <div className="step-lane"><span>Notes</span><div>{acidSettings.steps.map((active, step) => <button type="button" aria-label={`Acid note step ${step + 1}, degree ${acidSettings.degrees[step] + 1}`} className={`step-button${active ? ' active' : ''}`} key={step} onClick={() => setAcidSettings((current) => ({ ...current, steps: current.steps.map((value, index) => index === step ? !value : value) }))}>{active ? acidSettings.degrees[step] + 1 : '·'}</button>)}</div></div>
               <div className="step-lane accent-lane"><span>Accent</span><div>{acidSettings.accents.map((active, step) => <button type="button" aria-label={`Acid accent step ${step + 1}`} className={`step-button${active ? ' accent' : ''}`} key={step} onClick={() => setAcidSettings((current) => ({ ...current, accents: current.accents.map((value, index) => index === step ? !value : value) }))}>{active ? '▲' : '·'}</button>)}</div></div>
+              <div className="step-lane"><span>Glide</span><div>{acidSettings.slides.map((active, step) => <button type="button" aria-label={`Acid glide step ${step + 1}`} className={`step-button${active ? ' accent' : ''}`} key={step} onClick={() => setAcidSettings((current) => ({ ...current, slides: current.slides.map((value, index) => index === step ? !value : value) }))}>{active ? '↝' : '·'}</button>)}</div></div>
               <div className="acid-controls">
-                {([{ key: 'cutoff', label: 'Cutoff' }, { key: 'resonance', label: 'Resonance' }, { key: 'drive', label: 'Drive' }, { key: 'accent', label: 'Accent' }] as const).map((control) => <label className="slider-group" key={control.key}><div className="slider-label"><span>{control.label}</span><span>{Math.round(acidSettings[control.key])}%</span></div><input aria-label={`Acid ${control.label}`} type="range" min="0" max="100" value={acidSettings[control.key]} onChange={(event) => setAcidSettings((current) => ({ ...current, [control.key]: Number(event.target.value) }))} /></label>)}
-                <label className="slider-group"><div className="slider-label"><span>Octave</span><span>+{acidSettings.octave}</span></div><input aria-label="Acid octave" type="range" min="0" max="2" step="1" value={acidSettings.octave} onChange={(event) => setAcidSettings((current) => ({ ...current, octave: Number(event.target.value) }))} /></label>
+                {([{ key: 'cutoff', label: 'Mouth' }, { key: 'resonance', label: 'Squelch' }, { key: 'drive', label: 'Heat' }, { key: 'body', label: 'Body' }, { key: 'echo', label: 'Dub Echo' }, { key: 'accent', label: 'Bite' }] as const).map((control) => <label className="slider-group" key={control.key}><div className="slider-label"><span>{control.label}</span><span>{Math.round(acidSettings[control.key])}%</span></div><input aria-label={`Acid ${control.label}`} type="range" min="0" max="100" value={acidSettings[control.key]} onChange={(event) => setAcidSettings((current) => ({ ...current, [control.key]: Number(event.target.value) }))} /></label>)}
+                <label className="slider-group"><div className="slider-label"><span>Register</span><span>{acidSettings.octave === 0 ? 'Low' : acidSettings.octave === 1 ? 'Mid' : 'High'}</span></div><input aria-label="Acid register" type="range" min="0" max="2" step="1" value={acidSettings.octave} onChange={(event) => setAcidSettings((current) => ({ ...current, octave: Number(event.target.value) }))} /></label>
+                <label className="slider-group"><div className="slider-label"><span>Melody evolution</span><span>{acidSettings.evolveBars} bars</span></div><input aria-label="Acid melody evolution interval" type="range" min="4" max="32" step="4" value={acidSettings.evolveBars} onChange={(event) => setAcidSettings((current) => ({ ...current, evolveBars: Number(event.target.value) }))} /></label>
               </div>
             </div>
 
-            <div className="panel panel-full wizard-panel">
+            <div className="panel panel-full wizard-panel" data-workspace="machine" data-control-panel="wizard-grid">
               <div className="performance-heading"><div><h3>Wizard Grid &amp; Gesture Recorder</h3><span>Punch extra machine hits into the running pattern, then capture macro movement as an arrangement.</span></div><div className="btn-row"><button type="button" className={`btn${liveGridArmed ? ' active' : ''}`} onClick={() => setLiveGridArmed((current) => !current)}>{liveGridArmed ? 'Grid Armed' : 'Arm Grid'}</button><button type="button" className="btn" onClick={clearLiveGrid}>Clear grid</button></div></div>
               <div className="live-grid">
                 {(Object.entries(liveGrid) as Array<[keyof LiveGrid, boolean[]]>).map(([lane, steps]) => <div className="live-grid-row" key={lane}><span>{lane}</span>{steps.map((active, step) => <button type="button" aria-label={`${lane} step ${step + 1}`} className={`grid-cell${active ? ' active' : ''}`} key={step} onClick={() => toggleLiveGridCell(lane, step)}>{step % 4 === 0 ? step + 1 : ''}</button>)}</div>)}
@@ -3577,7 +4280,7 @@ export default function DroneEnginePage() {
               <div className="gesture-row"><div><strong>Gesture recorder</strong><span>{gestureRecording ? 'Recording macro moves' : gesturePlaying ? 'Playing captured gesture' : `${gestureFrames.length} frames in memory`}</span></div><div className="btn-row"><button type="button" className={`btn${gestureRecording ? ' active' : ''}`} onClick={toggleGestureRecording}>{gestureRecording ? 'Stop recording' : 'Record gesture'}</button><button type="button" className={`btn${gesturePlaying ? ' active' : ''}`} disabled={!gestureFrames.length} onClick={gesturePlaying ? stopGesturePlayback : playGesture}>{gesturePlaying ? 'Stop gesture' : 'Play gesture'}</button></div></div>
             </div>
 
-            <div className="panel panel-full">
+            <div className="panel panel-full" data-workspace="sound" data-control-panel="scale-generation">
               <h3>Scale &amp; Generation</h3>
               <div className="scale-row" style={{ marginBottom: 16 }}>
                 {(Object.keys(droneScales) as DroneScaleName[]).map((name) => (
@@ -3601,7 +4304,7 @@ export default function DroneEnginePage() {
               <div className="sample-help">New World fades the current generative layer into the room, releases a captured Freeze, and starts a newly seeded set of relationships without changing your patch.</div>
             </div>
 
-            <div className="panel panel-full">
+            <div className="panel panel-full" data-workspace="sound" data-control-panel="pulse-wander">
               <h3>Pulse &amp; Wander</h3>
               <div className="pulse-wander-grid">
                 <div>
@@ -3638,11 +4341,11 @@ export default function DroneEnginePage() {
               </div>
             </div>
 
-            <div className="panel panel-full performance-panel">
+            <div className="panel panel-full performance-panel" data-workspace="machine" data-control-panel="glitch-machine">
               <div className="performance-heading">
                 <div>
-                  <h3>Minimal Machine</h3>
-                  <span>{technoPreset === 'rumble' ? 'Kick-derived low rumble engaged' : technoPreset === 'broken' ? 'Variable kick pattern engaged' : 'Fixed four-to-the-floor kick · per-voice patterns evolve'}</span>
+                  <h3>Dub Machine</h3>
+                  <span>{technoPreset === 'dub' ? 'Low pressure · swung negative space · slow evolution' : technoPreset === 'glitch' ? 'Fractured anchors · micro-bursts · pattern mutation every 2 bars' : technoPreset === 'rumble' ? 'Kick-derived low rumble engaged' : technoPreset === 'broken' ? 'Variable kick pattern engaged' : 'Fixed four-to-the-floor kick · per-voice patterns evolve'}</span>
                 </div>
                 <div className="btn-row">
                   <button type="button" className="btn" onClick={mixTechnoMachine}>Mix</button>
@@ -3650,6 +4353,8 @@ export default function DroneEnginePage() {
                 </div>
               </div>
               <div className="scale-row" style={{ marginBottom: 16 }}>
+                <button type="button" className={`scale-btn${technoPreset === 'dub' ? ' active' : ''}`} onClick={() => applyTechnoPreset('dub')}>Dub</button>
+                <button type="button" className={`scale-btn${technoPreset === 'glitch' ? ' active' : ''}`} onClick={() => applyTechnoPreset('glitch')}>Glitch</button>
                 <button type="button" className={`scale-btn${technoPreset === 'classic' ? ' active' : ''}`} onClick={() => applyTechnoPreset('classic')}>Classic</button>
                 <button type="button" className={`scale-btn${technoPreset === 'detroit' ? ' active' : ''}`} onClick={() => applyTechnoPreset('detroit')}>Detroit</button>
                 <button type="button" className={`scale-btn${technoPreset === 'hardgroove' ? ' active' : ''}`} onClick={() => applyTechnoPreset('hardgroove')}>Hardgroove</button>
@@ -3660,11 +4365,27 @@ export default function DroneEnginePage() {
                 <div>
                   <div className="slider-group">
                     <div className="slider-label"><span>Tempo</span><span>{technoSettings.bpm} BPM</span></div>
-                    <input aria-label="Minimal machine tempo" type="range" min="118" max="142" step="1" value={technoSettings.bpm} onChange={(event) => setTechnoSettings((current) => ({ ...current, bpm: Number(event.target.value) }))} />
+                    <input aria-label="Dub machine tempo" type="range" min="118" max="174" step="1" value={technoSettings.bpm} onChange={(event) => setTechnoSettings((current) => ({ ...current, bpm: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Cut Kick</span><span>{technoSettings.cutKickEnabled ? 'On · extra attack' : 'Off'}</span></div>
+                    <div className="btn-row" style={{ marginBottom: 10 }}><button type="button" className={`btn${technoSettings.cutKickEnabled ? ' active' : ''}`} onClick={() => setTechnoSettings((current) => ({ ...current, cutKickEnabled: !current.cutKickEnabled }))}>{technoSettings.cutKickEnabled ? 'Cut Kick On' : 'Cut Kick Off'}</button></div>
+                    <div className="slider-label"><span>Cut Kick level</span><span>{technoSettings.cutKickLevel}%</span></div>
+                    <input aria-label="Cut Kick level" type="range" min="0" max="100" step="1" disabled={!technoSettings.cutKickEnabled} value={technoSettings.cutKickLevel} onChange={(event) => setTechnoSettings((current) => ({ ...current, cutKickLevel: Number(event.target.value) }))} />
                   </div>
                   <div className="slider-group">
                     <div className="slider-label"><span>Euclidean hats</span><span>{technoSettings.hatPulses}/16</span></div>
                     <input aria-label="Euclidean hi-hat pulses" type="range" min="0" max="16" step="1" value={technoSettings.hatPulses} onChange={(event) => setTechnoSettings((current) => ({ ...current, hatPulses: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group ride-control">
+                    <div className="slider-label"><span>Ride cymbal</span><span>{technoSettings.rideEnabled ? 'On' : 'Off'}</span></div>
+                    <div className="btn-row" style={{ marginBottom: 10 }}><button type="button" className={`btn${technoSettings.rideEnabled ? ' active' : ''}`} onClick={() => setTechnoSettings((current) => ({ ...current, rideEnabled: !current.rideEnabled }))}>{technoSettings.rideEnabled ? 'Ride On' : 'Ride Off'}</button></div>
+                    <div className="slider-label"><span>Euclidean ride</span><span>{technoSettings.ridePulses}/16</span></div>
+                    <input aria-label="Euclidean ride cymbal pulses" type="range" min="0" max="16" step="1" disabled={!technoSettings.rideEnabled} value={technoSettings.ridePulses} onChange={(event) => setTechnoSettings((current) => ({ ...current, ridePulses: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Ride chance</span><span>{technoSettings.rideChance}%</span></div>
+                    <input aria-label="Ride cymbal chance" type="range" min="0" max="100" step="1" disabled={!technoSettings.rideEnabled} value={technoSettings.rideChance} onChange={(event) => setTechnoSettings((current) => ({ ...current, rideChance: Number(event.target.value) }))} />
                   </div>
                   <div className="slider-group">
                     <div className="slider-label"><span>Euclidean snares</span><span>{technoSettings.snarePulses}/16</span></div>
@@ -3683,6 +4404,18 @@ export default function DroneEnginePage() {
                   <div className="slider-group">
                     <div className="slider-label"><span>Euclidean tom fill</span><span>{technoSettings.tomPulses}/4</span></div>
                     <input aria-label="Euclidean tom pulses" type="range" min="0" max="4" step="1" value={technoSettings.tomPulses} onChange={(event) => setTechnoSettings((current) => ({ ...current, tomPulses: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Ride decay</span><span>{technoSettings.rideDecay}%</span></div>
+                    <input aria-label="Ride cymbal decay" type="range" min="0" max="100" step="1" disabled={!technoSettings.rideEnabled} value={technoSettings.rideDecay} onChange={(event) => setTechnoSettings((current) => ({ ...current, rideDecay: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Ride tone</span><span>{technoSettings.rideTone}%</span></div>
+                    <input aria-label="Ride cymbal tone" type="range" min="0" max="100" step="1" disabled={!technoSettings.rideEnabled} value={technoSettings.rideTone} onChange={(event) => setTechnoSettings((current) => ({ ...current, rideTone: Number(event.target.value) }))} />
+                  </div>
+                  <div className="slider-group">
+                    <div className="slider-label"><span>Ride level</span><span>{technoSettings.rideLevel}%</span></div>
+                    <input aria-label="Ride cymbal level" type="range" min="0" max="100" step="1" disabled={!technoSettings.rideEnabled} value={technoSettings.rideLevel} onChange={(event) => setTechnoSettings((current) => ({ ...current, rideLevel: Number(event.target.value) }))} />
                   </div>
                   <div className="slider-group">
                     <div className="slider-label"><span>Evolve interval</span><span>{technoSettings.evolveBars} bars</span></div>
@@ -3704,12 +4437,12 @@ export default function DroneEnginePage() {
               </div>
               <div className="slider-group" style={{ marginTop: 12 }}>
                 <div className="slider-label"><span>Machine level</span><span>{technoSettings.volume}%</span></div>
-                <input aria-label="Minimal machine level" type="range" min="0" max="100" step="1" value={technoSettings.volume} onChange={(event) => setTechnoSettings((current) => ({ ...current, volume: Number(event.target.value) }))} />
+                <input aria-label="Glitch machine level" type="range" min="0" max="100" step="1" value={technoSettings.volume} onChange={(event) => setTechnoSettings((current) => ({ ...current, volume: Number(event.target.value) }))} />
               </div>
-              <div className="sample-help">Evolution {technoEvolution}: per-voice Euclidean patterns refresh every {technoSettings.evolveBars} bars. Mix randomizes the full groove while the kick remains locked.</div>
+              <div className="sample-help">Evolution {technoEvolution}: glitch mode combines asymmetric kick/snare anchors with short hats, flams, and repeat bursts. Mix randomizes the full groove.</div>
             </div>
 
-            <div className="panel panel-full performance-panel">
+            <div className="panel panel-full performance-panel" data-workspace="melody" data-control-panel="melody">
               <div className="performance-heading">
                 <div>
                   <h3>Constrained Melody</h3>
@@ -3804,15 +4537,23 @@ export default function DroneEnginePage() {
               <div className="sample-help">Melody evolution {melodyEvolution}: notes only come from the selected root and current scale. {melodySettings.composerEnabled ? 'Composer changes selected notes while keeping the phrase identity and final cadence.' : 'Legacy mode preserves the original one-bar constrained random walk.'} Duck follows the kick; Trance Gate rhythmically opens the melodic synth at the selected division.</div>
             </div>
 
-            <div className="panel panel-full">
-              <h3>Keyboard Play</h3>
+            <div className="panel panel-full in-key-panel" data-workspace="melody" data-control-panel="in-key">
+              <div className="in-key-heading">
+                <div>
+                  <h3>In-Key Performance</h3>
+                  <span>Gamma-style split play</span>
+                </div>
+                <div className="in-key-status"><i /> {droneScales[settings.scale].label}</div>
+              </div>
               <div className="btn-row" style={{ marginBottom: 12 }}>
                 <button type="button" className={`btn${keyboardPlayOn ? ' active' : ''}`} onClick={() => setKeyboardPlayOn((previous) => !previous)}>{keyboardPlayOn ? 'Keyboard On' : 'Keyboard Off'}</button>
+                <button type="button" className={`scale-btn${chordVoicing === 'triad' ? ' active' : ''}`} onClick={() => setChordVoicing('triad')}>Triads</button>
+                <button type="button" className={`scale-btn${chordVoicing === 'seventh' ? ' active' : ''}`} onClick={() => setChordVoicing('seventh')}>7th chords</button>
               </div>
               <div className="keyboard-controls">
                 <div className="slider-group">
-                  <div className="slider-label"><span>Musical transpose</span><span>{keyboardTranspose > 0 ? '+' : ''}{keyboardTranspose} st</span></div>
-                  <input type="range" min="-12" max="12" step="1" value={keyboardTranspose} onChange={(event) => setKeyboardTranspose(Number(event.target.value))} />
+                  <div className="slider-label"><span>Scale shift</span><span>{keyboardTranspose > 0 ? '+' : ''}{keyboardTranspose} degree</span></div>
+                  <input aria-label="Scale shift" type="range" min="-6" max="6" step="1" value={keyboardTranspose} onChange={(event) => setKeyboardTranspose(Number(event.target.value))} />
                 </div>
                 <div className="slider-group">
                   <div className="slider-label"><span>Octave shine</span><span>{keyboardShine}%</span></div>
@@ -3820,43 +4561,58 @@ export default function DroneEnginePage() {
                 </div>
               </div>
               <div className="sample-help">
-                Play soft, in-scale notes by hand — they stay locked to the current scale and blend into the same room as everything else. Transpose moves every key together in semitones; Octave shine adds a gentle musical overtone. <strong>A S D F G H J K L</strong> for the lower octave, <strong>W E R T Y U I O P</strong> for the octave above. Keys also work as buttons below.
+                Everything here is generated from the active scale: hold a chord with <strong>Z X C V B N M</strong>, then play melody with <strong>A S D F G H J K L</strong> or <strong>W E R T Y U I O P</strong>. Scale shift repositions the layout by scale degrees, never semitones, so every combination stays in key.
+              </div>
+              <div className="chord-keys" aria-label="In-key chord pads">
+                {chordKeyboardRow.map((key, index) => (
+                  <button
+                    type="button"
+                    key={key}
+                    className={`chord-pad${activeKeys[`chord-${key}`] ? ' active' : ''}`}
+                    onPointerDown={(event) => { event.preventDefault(); void playChord(key); }}
+                    onPointerUp={() => releaseKey(`chord-${key}`)}
+                    onPointerLeave={() => releaseKey(`chord-${key}`)}
+                    onPointerCancel={() => releaseKey(`chord-${key}`)}
+                  >
+                    <kbd>{key.toUpperCase()}</kbd><strong>{romanDegrees[index]}</strong><span>{chordVoicing === 'seventh' ? '7' : 'triad'}</span>
+                  </button>
+                ))}
               </div>
               <div className="keyboard-rows">
                 <div className="keyboard-row keyboard-row-upper">
                   {keyboardRowUpper.map((key) => (
-                    <span
+                    <button
+                      type="button"
                       key={key}
                       className={`key-badge${activeKeys[key] ? ' active' : ''}`}
-                      onMouseDown={() => void playKey(key)}
-                      onMouseUp={() => releaseKey(key)}
-                      onMouseLeave={() => releaseKey(key)}
-                      onTouchStart={(event) => { event.preventDefault(); void playKey(key); }}
-                      onTouchEnd={(event) => { event.preventDefault(); releaseKey(key); }}
+                      onPointerDown={(event) => { event.preventDefault(); void playKey(key); }}
+                      onPointerUp={() => releaseKey(key)}
+                      onPointerLeave={() => releaseKey(key)}
+                      onPointerCancel={() => releaseKey(key)}
                     >
                       {key.toUpperCase()}
-                    </span>
+                    </button>
                   ))}
                 </div>
                 <div className="keyboard-row">
                   {keyboardRowLower.map((key) => (
-                    <span
+                    <button
+                      type="button"
                       key={key}
                       className={`key-badge${activeKeys[key] ? ' active' : ''}`}
-                      onMouseDown={() => void playKey(key)}
-                      onMouseUp={() => releaseKey(key)}
-                      onMouseLeave={() => releaseKey(key)}
-                      onTouchStart={(event) => { event.preventDefault(); void playKey(key); }}
-                      onTouchEnd={(event) => { event.preventDefault(); releaseKey(key); }}
+                      onPointerDown={(event) => { event.preventDefault(); void playKey(key); }}
+                      onPointerUp={() => releaseKey(key)}
+                      onPointerLeave={() => releaseKey(key)}
+                      onPointerCancel={() => releaseKey(key)}
                     >
                       {key.toUpperCase()}
-                    </span>
+                    </button>
                   ))}
                 </div>
               </div>
             </div>
 
-            <div className="panel panel-full">
+            <div className="panel panel-full" data-workspace="melody" data-control-panel="midi">
               <h3>MIDI Input</h3>
               <div className="midi-controls">
                 <div className="btn-row">
@@ -3886,6 +4642,18 @@ export default function DroneEnginePage() {
               </div>
             </div>
           </div>
+
+          <nav className="workspace-dock" aria-label="Performance editors">
+            <div className="workspace-live-actions">
+              <button type="button" className={`dock-live-button${technoPlaying ? ' active' : ''}`} onClick={toggleTechnoMachine}><i />{technoPlaying ? 'Machine on' : 'Machine off'}</button>
+              <button type="button" className={`dock-live-button acid${acidSettings.enabled ? ' active' : ''}`} onClick={() => setAcidSettings((current) => ({ ...current, enabled: !current.enabled }))}><i />{acidSettings.enabled ? 'Acid on' : 'Acid off'}</button>
+            </div>
+            <div className="workspace-tabs">
+              {(Object.keys(workspaceMeta) as WorkspaceId[]).map((workspace) => <button type="button" key={workspace} className={activeWorkspace === workspace ? 'active' : ''} aria-pressed={activeWorkspace === workspace} onClick={() => openWorkspace(workspace)}><span>{workspaceMeta[workspace].shortLabel}</span><small>{workspaceMeta[workspace].label}</small></button>)}
+            </div>
+            <button type="button" className="dock-find-button" aria-label="Find a control" onClick={() => setControlFinderOpen(true)}>⌕ <span>Find</span></button>
+            <button type="button" className={`dock-mix-button${mixBoardOpen ? ' active' : ''}`} onClick={() => setMixBoardOpen((current) => !current)}>≋ <span>Mix</span></button>
+          </nav>
 
           <div className="info">
             Built with Web Audio API. Uses incommensurable timing, detuned oscillators, slow LFOs, granular synthesis, and procedural reverb.

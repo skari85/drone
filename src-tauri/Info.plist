@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 NiceSoftware AS. All rights reserved.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hi Drone uses your microphone to record short sounds and vocals to weave into the generative drone.</string>
 </dict>
